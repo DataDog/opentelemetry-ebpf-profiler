@@ -22,6 +22,8 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
+var selfPid = os.Getpid()
+
 // systemProcess provides an implementation of the Process interface for a
 // process that is currently running on this machine.
 type systemProcess struct {
@@ -274,11 +276,11 @@ func (sp *systemProcess) Open(file string) (ReadAtCloser, string, error) {
 		}
 		path := sp.getMappingFile(m)
 		f, err := os.Open(path)
-		return f, path, err
+		return f, fmt.Sprintf("/proc/%v/fd/%v", selfPid, f.Fd()), err
 	}
 
 	// Fall back to opening the file using the process specific root
 	path := fmt.Sprintf("/proc/%v/root/%s", sp.pid, file)
 	f, err := os.Open(path)
-	return f, path, err
+	return f, fmt.Sprintf("/proc/%v/fd/%v", selfPid, f.Fd()), err
 }
