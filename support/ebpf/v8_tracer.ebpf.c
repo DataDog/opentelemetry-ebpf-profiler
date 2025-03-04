@@ -317,6 +317,11 @@ int unwind_v8(struct pt_regs *ctx) {
     }
 
     error = get_next_unwinder_after_native_frame(record, &unwinder);
+#ifdef __aarch64__
+    if (!error && unwinder == PROG_UNWIND_NATIVE) {
+      record->state.sp = record->state.fp;
+    }
+#endif
     if (error || unwinder != PROG_UNWIND_V8) {
       break;
     }
