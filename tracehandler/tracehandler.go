@@ -128,6 +128,7 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 		APMRuntimeID:     "", // filled in below
 		APMTraceID:       bpfTrace.APMTraceID,
 		APMTransactionID: bpfTrace.APMTransactionID,
+		APMSpanID:        bpfTrace.APMSpanID,
 	}
 
 	if !m.reporter.SupportsReportTraceEvent() {

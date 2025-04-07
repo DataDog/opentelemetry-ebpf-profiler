@@ -524,6 +524,8 @@ typedef struct Trace {
   u64 ktime;
   // The current COMM of the thread of this Trace.
   char comm[COMM_LEN];
+  // APM span ID or all-zero if not present.
+  ApmSpanID apm_span_id;
   // APM transaction ID or all-zero if not present.
   ApmSpanID apm_transaction_id;
   // APM trace ID or all-zero if not present.

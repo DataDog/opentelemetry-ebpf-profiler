@@ -861,6 +861,7 @@ func (t *Tracer) loadBpfTrace(raw []byte) *host.Trace {
 		APMRuntimeID:     C.GoString((*C.char)(unsafe.Pointer(&ptr.apm_runtime_id))),
 		APMTraceID:       *(*libpf.APMTraceID)(unsafe.Pointer(&ptr.apm_trace_id)),
 		APMTransactionID: *(*libpf.APMTransactionID)(unsafe.Pointer(&ptr.apm_transaction_id)),
+		APMSpanID:        *(*libpf.APMSpanID)(unsafe.Pointer(&ptr.apm_span_id)),
 		PID:              libpf.PID(ptr.pid),
 		TID:              libpf.PID(ptr.tid),
 		KTime:            times.KTime(ptr.ktime),
@@ -874,6 +875,7 @@ func (t *Tracer) loadBpfTrace(raw []byte) *host.Trace {
 	ptr.apm_runtime_id = [128]C.char{}
 	ptr.apm_trace_id = C.ApmTraceID{}
 	ptr.apm_transaction_id = C.ApmSpanID{}
+	ptr.apm_span_id = C.ApmSpanID{}
 	ptr.ktime = 0
 	trace.Hash = host.TraceHash(xxh3.Hash128(raw).Lo)
 

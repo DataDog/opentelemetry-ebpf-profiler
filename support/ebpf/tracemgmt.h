@@ -224,6 +224,7 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_trace_id.as_int.hi = 0;
   trace->apm_trace_id.as_int.lo = 0;
   trace->apm_transaction_id.as_int = 0;
+  trace->apm_span_id.as_int = 0;
 
   return record;
 }

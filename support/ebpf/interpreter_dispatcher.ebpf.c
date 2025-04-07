@@ -163,13 +163,15 @@ void maybe_add_apm_info(Trace *trace) {
     trace->apm_trace_id.as_int.hi = corr_buf.trace_id.as_int.hi;
     trace->apm_trace_id.as_int.lo = corr_buf.trace_id.as_int.lo;
     trace->apm_transaction_id.as_int = corr_buf.transaction_id.as_int;
+    trace->apm_span_id.as_int = corr_buf.span_id.as_int;
   }
 
   increment_metric(metricID_UnwindApmIntReadSuccesses);
 
   // WARN: we print this as little endian
-  DEBUG_PRINT("APM transaction ID: %016llX, flags: 0x%02X",
-              trace->apm_transaction_id.as_int, corr_buf.trace_flags);
+  DEBUG_PRINT("APM transaction ID: %016llX, APM span ID: %016llX, flags: 0x%02X",
+              trace->apm_transaction_id.as_int, trace->apm_span_id.as_int,
+              corr_buf.trace_flags);
 }
 
 SEC("perf_event/unwind_stop")

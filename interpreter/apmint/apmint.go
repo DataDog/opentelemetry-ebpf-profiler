@@ -163,6 +163,7 @@ func (i *Instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 
 // NotifyAPMAgent sends out collected traces to the connected APM agent.
 // This is only called when layout-minor-version=1 (elastic's original Process Storage layout)
+// TODO: add support for span ID
 func (i *Instance) NotifyAPMAgent(
 	pid libpf.PID, rawTrace *host.Trace, umTraceHash libpf.TraceHash, count uint16) {
 	if rawTrace.APMTransactionID == libpf.InvalidAPMSpanID || i.socket == nil {

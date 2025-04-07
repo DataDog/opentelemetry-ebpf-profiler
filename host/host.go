@@ -56,4 +56,5 @@ type Trace struct {
 	APMRuntimeID     string
 	APMTraceID       libpf.APMTraceID
 	APMTransactionID libpf.APMTransactionID
+	APMSpanID        libpf.APMSpanID
 }
