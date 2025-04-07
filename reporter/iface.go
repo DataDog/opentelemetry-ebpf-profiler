@@ -32,10 +32,13 @@ type Reporter interface {
 }
 
 type TraceEventMeta struct {
-	Timestamp      libpf.UnixTime64
-	Comm           string
-	APMServiceName string
-	PID, TID       libpf.PID
+	Timestamp        libpf.UnixTime64
+	Comm             string
+	PID, TID         libpf.PID
+	APMServiceName   string
+	APMRuntimeID     string
+	APMTraceID       libpf.APMTraceID
+	APMTransactionID libpf.APMTransactionID
 }
 
 type TraceReporter interface {

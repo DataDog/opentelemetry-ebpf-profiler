@@ -53,6 +53,7 @@ type Trace struct {
 	KTime            times.KTime
 	PID              libpf.PID
 	TID              libpf.PID
+	APMRuntimeID     string
 	APMTraceID       libpf.APMTraceID
 	APMTransactionID libpf.APMTransactionID
 }

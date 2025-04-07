@@ -528,6 +528,8 @@ typedef struct Trace {
   ApmSpanID apm_transaction_id;
   // APM trace ID or all-zero if not present.
   ApmTraceID apm_trace_id;
+  // Runtime ID.
+  char apm_runtime_id[128];
   // The kernel stack ID.
   s32 kernel_stack_id;
   // The number of frames in the stack.

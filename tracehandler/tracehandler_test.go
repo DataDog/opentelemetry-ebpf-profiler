@@ -42,8 +42,10 @@ func (f *fakeTraceProcessor) ConvertTrace(trace *host.Trace) *libpf.Trace {
 
 func (f *fakeTraceProcessor) SymbolizationComplete(times.KTime) {}
 
-func (f *fakeTraceProcessor) MaybeNotifyAPMAgent(*host.Trace, libpf.TraceHash, uint16) string {
-	return ""
+func (f *fakeTraceProcessor) HandleAPMInfo(
+	*host.Trace,
+) (serviceName, runtimeID string) {
+	return
 }
 
 // arguments holds the inputs to test the appropriate functions.

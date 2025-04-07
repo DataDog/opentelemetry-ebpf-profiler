@@ -36,10 +36,9 @@ type Times interface {
 // from a form received from eBPF to the form we wish to dispatch to the
 // collection agent.
 type TraceProcessor interface {
-	// MaybeNotifyAPMAgent notifies a potentially existing connected APM agent
-	// that a stack trace was collected in their process. If an APM agent is
-	// listening, the service name is returned.
-	MaybeNotifyAPMAgent(rawTrace *host.Trace, umTraceHash libpf.TraceHash, count uint16) string
+	// If an APM agent is running, HandleAPMInfo returns the service name and
+	// runtime ID.
+	HandleAPMInfo(rawTrace *host.Trace) (serviceName, runtimeID string)
 
 	// ConvertTrace converts a trace from eBPF into the form we want to send to
 	// the collection agent. Depending on the frame type it will attempt to symbolize
@@ -121,11 +120,14 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 	timestamp := libpf.UnixTime64(bpfTrace.KTime.UnixNano())
 
 	meta := &reporter.TraceEventMeta{
-		Timestamp:      timestamp,
-		Comm:           bpfTrace.Comm,
-		PID:            bpfTrace.PID,
-		TID:            bpfTrace.TID,
-		APMServiceName: "", // filled in below
+		Timestamp:        timestamp,
+		Comm:             bpfTrace.Comm,
+		PID:              bpfTrace.PID,
+		TID:              bpfTrace.TID,
+		APMServiceName:   "", // filled in below
+		APMRuntimeID:     "", // filled in below
+		APMTraceID:       bpfTrace.APMTraceID,
+		APMTransactionID: bpfTrace.APMTransactionID,
 	}
 
 	if !m.reporter.SupportsReportTraceEvent() {
@@ -133,7 +135,8 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 		postConvHash, traceKnown := m.bpfTraceCache.Get(bpfTrace.Hash)
 		if traceKnown {
 			m.bpfTraceCacheHit++
-			meta.APMServiceName = m.traceProcessor.MaybeNotifyAPMAgent(bpfTrace, postConvHash, 1)
+			meta.APMServiceName, meta.APMRuntimeID = m.traceProcessor.HandleAPMInfo(
+				bpfTrace)
 			m.reporter.ReportCountForTrace(postConvHash, 1, meta)
 			return
 		}
@@ -145,7 +148,8 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 	log.Debugf("Trace hash remap 0x%x -> 0x%x", bpfTrace.Hash, umTrace.Hash)
 	m.bpfTraceCache.Add(bpfTrace.Hash, umTrace.Hash)
 
-	meta.APMServiceName = m.traceProcessor.MaybeNotifyAPMAgent(bpfTrace, umTrace.Hash, 1)
+	meta.APMServiceName, meta.APMRuntimeID = m.traceProcessor.HandleAPMInfo(
+		bpfTrace)
 	if m.reporter.SupportsReportTraceEvent() {
 		m.reporter.ReportTraceEvent(umTrace, meta)
 		return

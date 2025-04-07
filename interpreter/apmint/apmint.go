@@ -28,12 +28,16 @@ import (
 import "C"
 
 const (
+	// layoutMinorVersionLength defines the length of the layout minor version (uint16).
+	layoutMinorVersionLength = 2
 	// serviceNameMaxLength defines the maximum allowed length of service names.
 	serviceNameMaxLength = 128
 	// serviceEnvMaxLength defines the maximum allowed length of service environments.
 	serviceEnvMaxLength = 128
 	// socketPathMaxLength defines the maximum length of the APM agent socket path.
 	socketPathMaxLength = 1024
+	// runtimeIDLength defines the length of a UUID
+	runtimeIDLength = 128
 
 	// procStorageExport defines the name of the process storage ELF export.
 	procStorageExport = "elastic_apm_profiling_correlation_process_storage_v1"
@@ -41,7 +45,9 @@ const (
 	tlsExport = "elastic_apm_profiling_correlation_tls_v1"
 )
 
-var dsoRegex = regexp.MustCompile(`.*/elastic-jvmti-linux-([\w-]*)\.so`)
+var dsoRegex = regexp.MustCompile(
+	`[.*/]?((elastic-jvmti-linux-([\w-]*)\.so)|` +
+		`(libdd_trace_cpp-shared\.so))`)
 
 // apmProcessStorage represents a subset of the information present in the
 // APM process storage.
@@ -50,8 +56,10 @@ var dsoRegex = regexp.MustCompile(`.*/elastic-jvmti-linux-([\w-]*)\.so`)
 //
 //nolint:lll
 type apmProcessStorage struct {
-	ServiceName     string
-	TraceSocketPath string
+	LayoutMinorVersion uint16
+	ServiceName        string
+	TraceSocketPath    string
+	RuntimeID          string
 }
 
 // Loader implements interpreter.Loader.
@@ -118,24 +126,31 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 		return nil, err
 	}
 
-	// Establish socket connection with the agent.
-	socket, err := openAPMAgentSocket(pid, procStorage.TraceSocketPath)
-	if err != nil {
-		log.Warnf("Failed to open APM agent socket for PID %d", pid)
+	var socket *apmAgentSocket
+	if procStorage.LayoutMinorVersion == 1 {
+		// Establish socket connection with the agent.
+		socket, err = openAPMAgentSocket(pid, procStorage.TraceSocketPath)
+		if err != nil {
+			log.Warnf("Failed to open APM agent socket for PID %d", pid)
+		}
 	}
 
 	log.Debugf("PID %d apm.service.name: %s, trace socket: %s",
 		pid, procStorage.ServiceName, procStorage.TraceSocketPath)
 
 	return &Instance{
-		serviceName: procStorage.ServiceName,
-		socket:      socket,
+		layoutMinorVersion: procStorage.LayoutMinorVersion,
+		serviceName:        procStorage.ServiceName,
+		runtimeID:          procStorage.RuntimeID,
+		socket:             socket,
 	}, nil
 }
 
 type Instance struct {
-	serviceName string
-	socket      *apmAgentSocket
+	layoutMinorVersion uint16
+	serviceName        string
+	runtimeID          string
+	socket             *apmAgentSocket
 	interpreter.InstanceStubs
 }
 
@@ -147,6 +162,7 @@ func (i *Instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 }
 
 // NotifyAPMAgent sends out collected traces to the connected APM agent.
+// This is only called when layout-minor-version=1 (elastic's original Process Storage layout)
 func (i *Instance) NotifyAPMAgent(
 	pid libpf.PID, rawTrace *host.Trace, umTraceHash libpf.TraceHash, count uint16) {
 	if rawTrace.APMTransactionID == libpf.InvalidAPMSpanID || i.socket == nil {
@@ -159,7 +175,7 @@ func (i *Instance) NotifyAPMAgent(
 
 	msg := traceCorrMsg{
 		MessageType:      1,
-		MinorVersion:     1,
+		MinorVersion:     i.layoutMinorVersion,
 		APMTraceID:       rawTrace.APMTraceID,
 		APMTransactionID: rawTrace.APMTransactionID,
 		StackTraceID:     umTraceHash,
@@ -174,6 +190,11 @@ func (i *Instance) NotifyAPMAgent(
 // APMServiceName returns the service name advertised by the APM agent.
 func (i *Instance) APMServiceName() string {
 	return i.serviceName
+}
+
+// APMRuntimeID returns the runtimeID of the instrumented APM process
+func (i *Instance) APMRuntimeID() string {
+	return i.runtimeID
 }
 
 // isPotentialAgentLib checks whether the given path looks like a Java APM agent library.
@@ -207,6 +228,12 @@ func nextString(rm remotememory.RemoteMemory, addr *libpf.Address, maxLen int) (
 	return string(raw), nil
 }
 
+func getLayoutMinorVersion(rm remotememory.RemoteMemory, addr *libpf.Address) uint16 {
+	layoutMinorVersion := rm.Uint16(*addr)
+	*addr += layoutMinorVersionLength
+	return layoutMinorVersion
+}
+
 // readProcStorage reads the APM process storage from memory.
 //
 // https://github.com/elastic/apm/blob/bd5fa9c1/specs/agents/universal-profiling-integration.md#process-storage-layout
@@ -218,13 +245,12 @@ func readProcStorage(
 ) (*apmProcessStorage, error) {
 	readPtr := rm.Ptr(procStorageAddr)
 	if readPtr == 0 {
-		return nil, errors.New("failed to read Java agent process state pointer")
+		return nil, errors.New("failed to read APM agent process state pointer")
 	}
 
-	// Skip `layout-minor-version` field: not relevant until values != 1 exist.
 	// The specification guarantees that the struct can only be extended by adding
 	// new fields after the old ones.
-	readPtr += 2
+	layoutMinorVersion := getLayoutMinorVersion(rm, &readPtr)
 
 	serviceName, err := nextString(rm, &readPtr, serviceNameMaxLength)
 	if err != nil {
@@ -237,13 +263,26 @@ func readProcStorage(
 		return nil, err
 	}
 
-	socketPath, err := nextString(rm, &readPtr, socketPathMaxLength)
-	if err != nil {
-		return nil, err
+	var socketPath string
+	if layoutMinorVersion == 1 {
+		socketPath, err = nextString(rm, &readPtr, socketPathMaxLength)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var runtimeID string
+	if layoutMinorVersion == 2 {
+		runtimeID, err = nextString(rm, &readPtr, runtimeIDLength)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &apmProcessStorage{
-		ServiceName:     serviceName,
-		TraceSocketPath: socketPath,
+		LayoutMinorVersion: layoutMinorVersion,
+		ServiceName:        serviceName,
+		TraceSocketPath:    socketPath,
+		RuntimeID:          runtimeID,
 	}, nil
 }

@@ -321,25 +321,25 @@ func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID,
 	return Mapping{}, false
 }
 
-func (pm *ProcessManager) MaybeNotifyAPMAgent(
-	rawTrace *host.Trace, umTraceHash libpf.TraceHash, count uint16) string {
+func (pm *ProcessManager) HandleAPMInfo(rawTrace *host.Trace) (sn, ri string) {
 	pidInterp, ok := pm.interpreters[rawTrace.PID]
 	if !ok {
-		return ""
+		return "", ""
 	}
 
 	var serviceName string
+	var runtimeID string
 	for _, mapping := range pidInterp {
 		if apm, ok := mapping.(*apmint.Instance); ok {
-			apm.NotifyAPMAgent(rawTrace.PID, rawTrace, umTraceHash, count)
-
 			// It's pretty unusual for there to be more than one APM agent in a
 			// single process, but in case there is, just pick the last one.
 			serviceName = apm.APMServiceName()
+			// Similarly, pick the last runtime ID.
+			runtimeID = apm.APMRuntimeID()
 		}
 	}
 
-	return serviceName
+	return serviceName, runtimeID
 }
 
 func (pm *ProcessManager) SymbolizationComplete(traceCaptureKTime times.KTime) {
