@@ -297,16 +297,18 @@ func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.Mappin
 		return info
 	}
 
-	buildID, _ := ef.GetBuildID()
-	if buildID == "" {
-		// If the buildID is empty, try to get Go buildID.
-		buildID, _ = ef.GetGoBuildID()
+	gnuBuildID, _ := ef.GetBuildID()
+
+	goBuildID := ""
+	if ef.IsGolang() {
+		goBuildID, _ = ef.GetGoBuildID()
 	}
 
 	pm.reporter.ExecutableMetadata(&reporter.ExecutableMetadataArgs{
 		FileID:            fileID,
 		FileName:          mapping.Path,
-		GnuBuildID:        buildID,
+		GnuBuildID:        gnuBuildID,
+		GoBuildID:         goBuildID,
 		DebuglinkFileName: ef.DebuglinkFileName(elfRef.FileName(), elfRef),
 		Interp:            libpf.Native,
 		Open:              pr,
