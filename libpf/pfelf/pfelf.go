@@ -191,7 +191,7 @@ func getGoBuildIDFromNotes(notes []byte) (string, error) {
 	// When building Go binaries, Bazel explicitly sets their build ID to "redacted"
 	// see https://github.com/bazelbuild/rules_go/blob/199d8e4827f87d382a85febd0148c1b42fa949cc/go/private/actions/link.bzl#L174.
 	// In that case, we don't want to associate the build ID with the binary in the mapping.
-	if !found || buildID == "redacted" {
+	if !found {
 		return "", ErrNoBuildID
 	}
 	return buildID, nil
