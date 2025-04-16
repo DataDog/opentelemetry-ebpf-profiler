@@ -66,7 +66,7 @@ type ExecutableMetadataArgs struct {
 	FileName string
 	// GnuBuildID is the GNU build ID from .note.gnu.build-id, if any.
 	GnuBuildID string
-	// GobuildID is the Go build ID from .note.gobuildid, if any.
+	// GoBuildID is the Go build ID from .note.gobuildid, if any.
 	GoBuildID string
 	// DebuglinkFileName is the path to the matching debug file
 	// from the .gnu.debuglink, if any. The caller should
