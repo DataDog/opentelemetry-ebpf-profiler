@@ -200,6 +200,7 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
 #elif defined(__aarch64__)
   record->state.lr = 0;
   record->state.r22 = 0;
+  // record->state.r28        = 0; // ADDED FOR GO? is it necessary?
 #endif
   record->state.return_address = false;
   record->state.error_metric = -1;
@@ -223,6 +224,13 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_trace_id.as_int.hi = 0;
   trace->apm_trace_id.as_int.lo = 0;
   trace->apm_transaction_id.as_int = 0;
+
+    // is this maybe just for GO??
+  u64 *labels_space = (u64 *)&trace->custom_labels;
+#pragma unroll
+  for (int i = 0; i < sizeof(CustomLabelsArray) / 8; i++) {
+    labels_space[i] = 0;
+  }
 
   return record;
 }

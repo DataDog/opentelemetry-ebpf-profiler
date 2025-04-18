@@ -40,6 +40,9 @@ const (
 
 	// APMInt identifies the pseudo-interpreter for the APM integration.
 	APMInt InterpreterType = 0x100
+
+	// CustomLabels identifies the pseudo-interpreter for native custom labels support.
+	CustomLabels InterpreterType = 0x102
 )
 
 // Frame converts the interpreter type into the corresponding frame type.

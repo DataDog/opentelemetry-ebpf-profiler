@@ -150,6 +150,9 @@ type Config struct {
 	FilterErrorFrames bool
 	// KernelVersionCheck indicates whether the kernel version should be checked.
 	KernelVersionCheck bool
+	// CollectCustomLabels determines whether to collect custom labels in
+	// languages that support them.
+	CollectCustomLabels bool
 	// BPFVerifierLogLevel is the log level of the eBPF verifier output.
 	BPFVerifierLogLevel uint32
 	// BPFVerifierLogSize is the size in bytes that will be allocated for the eBPF verifier output.
@@ -282,7 +285,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		ebpfHandler, nil, cfg.Reporter, elfunwindinfo.NewStackDeltaProvider(),
-		cfg.FilterErrorFrames)
+		cfg.FilterErrorFrames, cfg.CollectCustomLabels)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}
@@ -924,6 +927,16 @@ func (t *Tracer) loadBpfTrace(raw []byte) *host.Trace {
 			log.Errorf("Failed to get kernel stack frames for 0x%x: %v", trace.Hash, err)
 		} else {
 			userFrameOffs = int(kstackLen)
+		}
+	}
+
+	if ptr.custom_labels.len > 0 {
+		trace.CustomLabels = make(map[string]string, int(ptr.custom_labels.len))
+		for i := 0; i < int(ptr.custom_labels.len); i++ {
+			lbl := ptr.custom_labels.labels[i]
+			key := C.GoString((*C.char)(unsafe.Pointer(&lbl.key)))
+			val := C.GoString((*C.char)(unsafe.Pointer(&lbl.val)))
+			trace.CustomLabels[key] = val
 		}
 	}
 

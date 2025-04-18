@@ -18,6 +18,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/host"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/interpreter"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/interpreter/apmint"
+	"github.com/open-telemetry/opentelemetry-ebpf-profiler/interpreter/customlabels"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/interpreter/dotnet"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/interpreter/hotspot"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/interpreter/nodev8"
@@ -100,6 +101,7 @@ func NewExecutableInfoManager(
 	sdp nativeunwind.StackDeltaProvider,
 	ebpf pmebpf.EbpfHandler,
 	includeTracers types.IncludedTracers,
+	collectCustomLabels bool,
 ) (*ExecutableInfoManager, error) {
 	// Initialize interpreter loaders.
 	interpreterLoaders := make([]interpreter.Loader, 0)
@@ -126,6 +128,9 @@ func NewExecutableInfoManager(
 	}
 
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)
+	if collectCustomLabels {
+		interpreterLoaders = append(interpreterLoaders, customlabels.Loader)
+	}
 
 	deferredFileIDs, err := lru.NewSynced[host.FileID, libpf.Void](deferredFileIDSize,
 		func(id host.FileID) uint32 { return uint32(id) })

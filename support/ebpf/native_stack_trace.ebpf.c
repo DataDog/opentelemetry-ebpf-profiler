@@ -511,6 +511,7 @@ static ErrorCode unwind_one_frame(u64 pid, u32 frame_idx, struct UnwindState *st
       state->fp = rt_regs[29];
       state->lr = normalize_pac_ptr(rt_regs[30]);
       state->r22 = rt_regs[22];
+      // state->r28            = rt_regs[28]; // ADDED FOR GO??  is it necessary for custom?
       state->return_address = false;
       DEBUG_PRINT("signal frame");
       goto frame_ok;
