@@ -593,6 +593,8 @@ typedef struct Trace {
   ApmSpanID apm_transaction_id;
   // APM trace ID or all-zero if not present.
   ApmTraceID apm_trace_id;
+  // Runtime ID.
+  char apm_runtime_id[128];
   // Custom Labels
   CustomLabelsArray custom_labels;
   // The kernel stack ID.

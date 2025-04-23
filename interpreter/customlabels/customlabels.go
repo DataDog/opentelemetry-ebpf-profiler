@@ -17,16 +17,27 @@ import (
 )
 
 const (
+	// layoutMinorVersionLength defines the length of the layout minor version (uint16).
+	layoutMinorVersionLength = 2
+	// serviceNameMaxLength defines the maximum allowed length of service names.
+	serviceNameMaxLength = 128
+	// serviceEnvMaxLength defines the maximum allowed length of service environments.
+	serviceEnvMaxLength = 128
+	// runtimeIDLength defines the length of a UUID
+	runtimeIDLength = 128
+
 	abiVersionExport = "custom_labels_abi_version"
+	procStorageExport = "process_storage"
 	tlsExport        = "custom_labels_current_set"
 )
 
 var dsoRegex = regexp.MustCompile(`.*/libcustomlabels.*\.so|.*/customlabels\.node`)
 
 type data struct {
-	abiVersionElfVA libpf.Address
-	tlsAddr         libpf.Address
-	isSharedLibrary bool
+	abiVersionElfVA  libpf.Address
+	procStorageElfVA libpf.Address
+	tlsAddr          libpf.Address
+	isSharedLibrary  bool
 }
 
 var _ interpreter.Data = &data{}
@@ -55,6 +66,15 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 
 	if abiVersionSym.Size != 4 {
 		return nil, fmt.Errorf("abi version export has wrong size %d", abiVersionSym.Size)
+	}
+
+	procStorageSym, err := ef.LookupSymbol(procStorageExport)
+	if err != nil {
+		if errors.Is(err, pfelf.ErrSymbolNotFound) {
+			return nil, nil
+		}
+
+		return nil, err
 	}
 
 	// If this is the libcustomlabels.so library, we are using
@@ -112,13 +132,17 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 
 	d := data{
 		abiVersionElfVA: libpf.Address(abiVersionSym.Address),
+		procStorageElfVA: libpf.Address(procStorageSym.Address),
 		tlsAddr:         tlsAddr,
 		isSharedLibrary: isSharedLibrary,
 	}
 	return &d, nil
 }
 
-type instance struct {
+type Instance struct {
+	layoutMinorVersion uint16
+	serviceName        string
+	runtimeID          string
 	interpreter.InstanceStubs
 }
 
@@ -137,6 +161,11 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 			" (only 1 is supported)", abiVersion)
 	}
 
+	procStorage, err := readProcStorage(rm, bias+d.procStorageElfVA)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read correlation process storage: %s", err)
+	}
+
 	var tlsOffset uint64
 	if d.isSharedLibrary {
 		// Read TLS offset from the TLS descriptor
@@ -151,9 +180,100 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 		return nil, err
 	}
 
-	return &instance{}, nil
+	return &Instance{
+		layoutMinorVersion: procStorage.LayoutMinorVersion,
+		serviceName:        procStorage.ServiceName,
+		runtimeID:          procStorage.RuntimeID,
+	}, nil
 }
 
-func (i *instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
+func (i *Instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 	return ebpf.DeleteProcData(libpf.CustomLabels, pid)
+}
+
+// ServiceName returns the service name advertised by the agent.
+func (i *Instance) ServiceName() string {
+	return i.serviceName
+}
+
+// RuntimeID returns the runtimeID of the instrumented process.
+func (i *Instance) RuntimeID() string {
+	return i.runtimeID
+}
+
+type procStorage struct {
+	LayoutMinorVersion uint16
+	ServiceName        string
+	RuntimeID          string
+}
+
+// nextString reads the next `utf8-str` from memory and updates addr accordingly.
+//
+// https://github.com/elastic/apm/blob/bd5fa9c1/specs/agents/universal-profiling-integration.md#general-memory-layout
+//
+//nolint:lll
+func nextString(rm remotememory.RemoteMemory, addr *libpf.Address, maxLen int) (string, error) {
+	length := int(rm.Uint32(*addr))
+	*addr += 4
+	if length == 0 {
+		return "", nil
+	}
+	if length > maxLen {
+		return "", fmt.Errorf("APM string length %d exceeds maximum length of %d", length, maxLen)
+	}
+	raw := make([]byte, length)
+	if _, err := rm.ReadAt(raw, int64(*addr)); err != nil {
+		return "", errors.New("failed to read memory")
+	}
+	*addr += libpf.Address(length)
+	return string(raw), nil
+}
+
+func getLayoutMinorVersion(rm remotememory.RemoteMemory, addr *libpf.Address) uint16 {
+	layoutMinorVersion := rm.Uint16(*addr)
+	*addr += layoutMinorVersionLength
+	return layoutMinorVersion
+}
+
+// readProcStorage reads the APM process storage from memory.
+// This link is not entirely valid.
+// https://github.com/elastic/apm/blob/bd5fa9c1/specs/agents/universal-profiling-integration.md#process-storage-layout
+//
+//nolint:lll
+func readProcStorage(
+	rm remotememory.RemoteMemory,
+	procStorageAddr libpf.Address,
+) (*procStorage, error) {
+	readPtr := rm.Ptr(procStorageAddr)
+	if readPtr == 0 {
+		return nil, errors.New("failed to read APM agent process state pointer")
+	}
+
+	// The specification guarantees that the struct can only be extended by adding
+	// new fields after the old ones.
+	layoutMinorVersion := getLayoutMinorVersion(rm, &readPtr)
+
+	serviceName, err := nextString(rm, &readPtr, serviceNameMaxLength)
+	if err != nil {
+		return nil, err
+	}
+	// Currently not used by us.
+	_, err = nextString(rm, &readPtr, serviceEnvMaxLength)
+	if err != nil {
+		return nil, err
+	}
+
+	var runtimeID string
+	if layoutMinorVersion == 2 {
+		runtimeID, err = nextString(rm, &readPtr, runtimeIDLength)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &procStorage{
+		LayoutMinorVersion: layoutMinorVersion,
+		ServiceName:        serviceName,
+		RuntimeID:          runtimeID,
+	}, nil
 }

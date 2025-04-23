@@ -987,6 +987,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		Comm:             C.GoString((*C.char)(unsafe.Pointer(&ptr.comm))),
 		ExecutablePath:   procMeta.Executable,
 		ProcessName:      procMeta.Name,
+		APMRuntimeID:     C.GoString((*C.char)(unsafe.Pointer(&ptr.apm_runtime_id))),
 		APMTraceID:       *(*libpf.APMTraceID)(unsafe.Pointer(&ptr.apm_trace_id)),
 		APMTransactionID: *(*libpf.APMTransactionID)(unsafe.Pointer(&ptr.apm_transaction_id)),
 		PID:              pid,
@@ -1008,6 +1009,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 	// Intentionally excluded:
 	//  - ktime, COMM, APM trace, APM transaction ID, Origin and Off Time
 	ptr.comm = [16]C.char{}
+	ptr.apm_runtime_id = [128]C.char{}
 	ptr.apm_trace_id = C.ApmTraceID{}
 	ptr.apm_transaction_id = C.ApmSpanID{}
 	ptr.ktime = 0

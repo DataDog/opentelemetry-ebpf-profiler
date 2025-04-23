@@ -43,6 +43,10 @@ type TraceProcessor interface {
 	// listening, the service name is returned.
 	MaybeNotifyAPMAgent(rawTrace *host.Trace, umTraceHash libpf.TraceHash, count uint16) string
 
+	// HandleProcInfo retrives the service name and runtime id of an instrumented
+	// process running with the custom labels agent.
+	HandleProcInfo(rawTrace *host.Trace) (sn, ri string)
+
 	// ConvertTrace converts a trace from eBPF into the form we want to send to
 	// the collection agent. Depending on the frame type it will attempt to symbolize
 	// the frame and send the associated metadata to the collection agent.
@@ -126,12 +130,14 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 		PID:            bpfTrace.PID,
 		TID:            bpfTrace.TID,
 		APMServiceName: "", // filled in below
+		APMRuntimeID:   "", // filled in below
 		CPU:            bpfTrace.CPU,
 		ProcessName:    bpfTrace.ProcessName,
 		ExecutablePath: bpfTrace.ExecutablePath,
 		Origin:         bpfTrace.Origin,
 		OffTime:        bpfTrace.OffTime,
 		EnvVars:        bpfTrace.EnvVars,
+		CustomLabels:   bpfTrace.CustomLabels,
 	}
 
 	if m.traceCache != nil {
@@ -139,7 +145,8 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 			traceCacheLifetime); exists {
 			m.traceCacheHit++
 			// Fast path
-			meta.APMServiceName = m.traceProcessor.MaybeNotifyAPMAgent(bpfTrace, trace.Hash, 1)
+			meta.APMServiceName, meta.APMRuntimeID = m.traceProcessor.HandleProcInfo(
+				bpfTrace)
 			if err := m.reporter.ReportTraceEvent(&trace, meta); err != nil {
 				log.Errorf("Failed to report trace event: %v", err)
 			}
@@ -154,7 +161,8 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 		m.traceCache.Add(bpfTrace.Hash, *umTrace)
 	}
 
-	meta.APMServiceName = m.traceProcessor.MaybeNotifyAPMAgent(bpfTrace, umTrace.Hash, 1)
+	meta.APMServiceName, meta.APMRuntimeID = m.traceProcessor.HandleProcInfo(
+		bpfTrace)
 	if err := m.reporter.ReportTraceEvent(umTrace, meta); err != nil {
 		log.Errorf("Failed to report trace event: %v", err)
 	}

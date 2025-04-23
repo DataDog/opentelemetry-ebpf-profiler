@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
@@ -324,6 +325,27 @@ func (pm *ProcessManager) MaybeNotifyAPMAgent(
 	}
 
 	return serviceName
+}
+
+func (pm *ProcessManager) HandleProcInfo(rawTrace *host.Trace) (sn, ri string) {
+	pidInterp, ok := pm.interpreters[rawTrace.PID]
+	if !ok {
+		return "", ""
+	}
+
+	var serviceName string
+	var runtimeID string
+	for _, mapping := range pidInterp {
+		if cl, ok := mapping.(*customlabels.Instance); ok {
+			// It's pretty unusual for there to be more than one custom labels agent in a
+			// single process, but in case there is, just pick the last one.
+			serviceName = cl.ServiceName()
+			// Similarly, pick the last runtime ID.
+			runtimeID = cl.RuntimeID()
+		}
+	}
+
+	return serviceName, runtimeID
 }
 
 // AddSynthIntervalData adds synthetic stack deltas to the manager. This is useful for cases where

@@ -11,11 +11,13 @@ type TraceEventMeta struct {
 	ProcessName    string
 	ExecutablePath string
 	APMServiceName string
+	APMRuntimeID   string
 	PID, TID       libpf.PID
 	CPU            int
 	Origin         libpf.Origin
 	OffTime        int64
 	EnvVars        map[string]string
+	CustomLabels   map[string]string
 }
 
 // TraceEvents holds known information about a trace.

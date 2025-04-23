@@ -46,6 +46,10 @@ func (f *fakeTraceProcessor) MaybeNotifyAPMAgent(*host.Trace, libpf.TraceHash, u
 	return ""
 }
 
+func (f *fakeTraceProcessor) HandleProcInfo(*host.Trace) (sn, ri string) {
+	return "", ""
+}
+
 // arguments holds the inputs to test the appropriate functions.
 type arguments struct {
 	// trace holds the arguments for the function HandleTrace().
