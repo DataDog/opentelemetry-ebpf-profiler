@@ -26,9 +26,8 @@ const (
 	// runtimeIDLength defines the length of a UUID
 	runtimeIDLength = 128
 
-	abiVersionExport = "custom_labels_abi_version"
 	procStorageExport = "process_storage"
-	tlsExport        = "custom_labels_current_set"
+	tlsExport         = "custom_labels_current_set"
 )
 
 var dsoRegex = regexp.MustCompile(`.*/libcustomlabels.*\.so|.*/customlabels\.node`)
@@ -53,19 +52,6 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	ef, err := info.GetELF()
 	if err != nil {
 		return nil, err
-	}
-
-	abiVersionSym, err := ef.LookupSymbol(abiVersionExport)
-	if err != nil {
-		if errors.Is(err, pfelf.ErrSymbolNotFound) {
-			return nil, nil
-		}
-
-		return nil, err
-	}
-
-	if abiVersionSym.Size != 4 {
-		return nil, fmt.Errorf("abi version export has wrong size %d", abiVersionSym.Size)
 	}
 
 	procStorageSym, err := ef.LookupSymbol(procStorageExport)
@@ -131,10 +117,9 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	}
 
 	d := data{
-		abiVersionElfVA: libpf.Address(abiVersionSym.Address),
 		procStorageElfVA: libpf.Address(procStorageSym.Address),
-		tlsAddr:         tlsAddr,
-		isSharedLibrary: isSharedLibrary,
+		tlsAddr:          tlsAddr,
+		isSharedLibrary:  isSharedLibrary,
 	}
 	return &d, nil
 }
@@ -151,16 +136,6 @@ func (d data) Unload(_ interpreter.EbpfHandler) {
 
 func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	bias libpf.Address, rm remotememory.RemoteMemory) (interpreter.Instance, error) {
-	abiVersion, err := rm.Uint32Checked(bias + d.abiVersionElfVA)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read custom labels ABI version: %w", err)
-	}
-
-	if abiVersion != 1 {
-		return nil, fmt.Errorf("unsupported custom labels ABI version: %d"+
-			" (only 1 is supported)", abiVersion)
-	}
-
 	procStorage, err := readProcStorage(rm, bias+d.procStorageElfVA)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read correlation process storage: %s", err)
