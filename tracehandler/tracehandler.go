@@ -132,6 +132,7 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 		Origin:         bpfTrace.Origin,
 		OffTime:        bpfTrace.OffTime,
 		EnvVars:        bpfTrace.EnvVars,
+		CustomLabels:   bpfTrace.CustomLabels,
 	}
 
 	if m.traceCache != nil {

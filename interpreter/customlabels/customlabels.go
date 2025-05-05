@@ -17,16 +17,14 @@ import (
 )
 
 const (
-	abiVersionExport = "custom_labels_abi_version"
-	tlsExport        = "custom_labels_current_set"
+	tlsExport         = "custom_labels_current_set"
 )
 
 var dsoRegex = regexp.MustCompile(`.*/libcustomlabels.*\.so|.*/customlabels\.node`)
 
 type data struct {
-	abiVersionElfVA libpf.Address
-	tlsAddr         libpf.Address
-	isSharedLibrary bool
+	tlsAddr          libpf.Address
+	isSharedLibrary  bool
 }
 
 var _ interpreter.Data = &data{}
@@ -42,19 +40,6 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	ef, err := info.GetELF()
 	if err != nil {
 		return nil, err
-	}
-
-	abiVersionSym, err := ef.LookupSymbol(abiVersionExport)
-	if err != nil {
-		if errors.Is(err, pfelf.ErrSymbolNotFound) {
-			return nil, nil
-		}
-
-		return nil, err
-	}
-
-	if abiVersionSym.Size != 4 {
-		return nil, fmt.Errorf("abi version export has wrong size %d", abiVersionSym.Size)
 	}
 
 	// If this is the libcustomlabels.so library, we are using
@@ -111,14 +96,13 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	}
 
 	d := data{
-		abiVersionElfVA: libpf.Address(abiVersionSym.Address),
-		tlsAddr:         tlsAddr,
-		isSharedLibrary: isSharedLibrary,
+		tlsAddr:          tlsAddr,
+		isSharedLibrary:  isSharedLibrary,
 	}
 	return &d, nil
 }
 
-type instance struct {
+type Instance struct {
 	interpreter.InstanceStubs
 }
 
@@ -127,15 +111,6 @@ func (d data) Unload(_ interpreter.EbpfHandler) {
 
 func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	bias libpf.Address, rm remotememory.RemoteMemory) (interpreter.Instance, error) {
-	abiVersion, err := rm.Uint32Checked(bias + d.abiVersionElfVA)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read custom labels ABI version: %w", err)
-	}
-
-	if abiVersion != 1 {
-		return nil, fmt.Errorf("unsupported custom labels ABI version: %d"+
-			" (only 1 is supported)", abiVersion)
-	}
 
 	var tlsOffset uint64
 	if d.isSharedLibrary {
@@ -151,9 +126,10 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 		return nil, err
 	}
 
-	return &instance{}, nil
+	return &Instance{
+	}, nil
 }
 
-func (i *instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
+func (i *Instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 	return ebpf.DeleteProcData(libpf.CustomLabels, pid)
 }

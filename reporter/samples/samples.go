@@ -16,6 +16,7 @@ type TraceEventMeta struct {
 	Origin         libpf.Origin
 	OffTime        int64
 	EnvVars        map[string]string
+	CustomLabels   map[string]string
 }
 
 // TraceEvents holds known information about a trace.
