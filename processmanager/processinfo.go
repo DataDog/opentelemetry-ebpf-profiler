@@ -15,9 +15,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	"syscall"
 	"time"
+	"unique"
 
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -348,8 +350,23 @@ func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.Mappin
 		return info
 	}
 
+	baseName := path.Base(mapping.Path.String())
+	if baseName == "/" {
+		// There are circumstances where there is no filename.
+		// E.g. kernel module 'bpfilter_umh' before Linux 5.9-rc1 uses
+		// fork_usermode_blob() and launches process with a blob without
+		// filename mapped in as the executable.
+		baseName = "<anonymous-blob>"
+	}
+	gnuBuildID, _ := ef.GetBuildID()
+
+	info.mappingFile = unique.Make(libpf.FrameMappingFileData{
+		FileID:     fileID,
+		FileName:   libpf.Intern(baseName),
+		GnuBuildID: gnuBuildID,
+	})
+
 	hostFileID := host.FileIDFromLibpf(fileID)
-	info.fileID = hostFileID
 	info.addressMapper = ef.GetAddressMapper()
 	if mapping.IsVDSO() {
 		intervals := createVDSOSyntheticRecord(ef)
@@ -364,29 +381,16 @@ func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.Mappin
 	if info.err == nil {
 		pm.elfInfoCache.Add(key, info)
 	}
-	pm.FileIDMapper.Set(hostFileID, fileID)
+	pm.FileIDMapper.Set(hostFileID, info.mappingFile)
 
-	if pm.reporter.ExecutableKnown(fileID) {
-		return info
+	if pm.exeReporter != nil {
+		pm.exeReporter.ReportExecutable(&reporter.ExecutableMetadata{
+			MappingFile:       info.mappingFile,
+			Process:           pr,
+			Mapping:           mapping,
+			DebuglinkFileName: ef.DebuglinkFileName(elfRef.FileName(), elfRef),
+		})
 	}
-
-	gnuBuildID, _ := ef.GetBuildID()
-
-	goBuildID := ""
-	if ef.IsGolang() {
-		goBuildID, _ = ef.GetGoBuildID()
-	}
-
-	pm.reporter.ExecutableMetadata(&reporter.ExecutableMetadataArgs{
-		FileID:            fileID,
-		FileName:          mapping.Path.String(),
-		GnuBuildID:        gnuBuildID,
-		GoBuildID:         goBuildID,
-		DebuglinkFileName: ef.DebuglinkFileName(elfRef.FileName(), elfRef),
-		Interp:            libpf.Native,
-		Open:              pr,
-	})
-
 	return info
 }
 
@@ -423,7 +427,7 @@ func (pm *ProcessManager) processNewExecMapping(pr process.Process, mapping *pro
 
 	if err := pm.handleNewMapping(pr,
 		&Mapping{
-			FileID:     info.fileID,
+			FileID:     host.FileIDFromLibpf(info.mappingFile.Value().FileID),
 			Vaddr:      libpf.Address(mapping.Vaddr),
 			Bias:       mapping.Vaddr - elfSpaceVA,
 			Length:     mapping.Length,
@@ -546,7 +550,7 @@ func (pm *ProcessManager) synchronizeMappings(pr process.Process,
 	if pm.interpreterTracerEnabled {
 		pm.mu.Lock()
 		for _, instance := range pm.interpreters[pid] {
-			err := instance.SynchronizeMappings(pm.ebpf, pm.reporter, pr, mappings)
+			err := instance.SynchronizeMappings(pm.ebpf, pm.exeReporter, pr, mappings)
 			if err != nil {
 				if alive, _ := isPIDLive(pid); alive {
 					log.Errorf("Failed to handle new anonymous mapping for PID %d: %v", pid, err)
