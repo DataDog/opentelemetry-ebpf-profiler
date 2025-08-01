@@ -6,8 +6,13 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write
+      id-token: write # Needed to federate tokens
     steps:
+      - uses: DataDog/dd-octo-sts-action@acaa02eee7e3bb0839e4272dacb37b8f3b58ba80 # v1.0.3
+        id: octo-sts
+        with:
+          scope: open-telemetry/opentelemetry-ebpf-profiler
+          policy: self.prepare-rebase-on-upstream.create-pr
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -44,10 +49,10 @@ jobs:
         run: |
           gh pr create -R ${{ github.repository }} --base main --head rebase-on-upstream --title "Rebase datadog on upstream/main" --body "This PR is to rebase datadog branch on main branch"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
 
       - name: Add comment
         run: |
           gh pr comment rebase-on-upstream -R ${{ github.repository }} --body "Please close and re-open this PR to trigger the tests."
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
