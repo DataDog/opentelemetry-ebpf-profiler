@@ -317,11 +317,6 @@ func (cd *CoredumpProcess) ExtractAsFile(_ string) (string, error) {
 	return "", errors.New("coredump does not support opening backing file")
 }
 
-// Open implements the FileOpener and Process interfaces
-func (cd *CoredumpProcess) Open(path string) (ReadAtCloser, string, error) {
-	return nil, path, errors.New("coredump does not support opening files")
-}
-
 // getFile returns (creating if needed) a matching CoredumpFile for given file name.
 func (cd *CoredumpProcess) getFile(name string) *CoredumpFile {
 	if cf, ok := cd.files[name]; ok {

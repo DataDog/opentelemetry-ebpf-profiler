@@ -13,6 +13,8 @@ type FrameMappingFileData struct {
 	FileName String
 	// GnuBuildID is the GNU build ID from .note.gnu.build-id, if any.
 	GnuBuildID string
+	// GoBuildID is the Go build ID from .note.go.buildid, if any.
+	GoBuildID string
 }
 type FrameMappingFile = unique.Handle[FrameMappingFileData]
 

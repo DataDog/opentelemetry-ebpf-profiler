@@ -359,11 +359,16 @@ func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.Mappin
 		baseName = "<anonymous-blob>"
 	}
 	gnuBuildID, _ := ef.GetBuildID()
+	goBuildID := ""
+	if ef.IsGolang() {
+		goBuildID, _ = ef.GetGoBuildID()
+	}
 
 	info.mappingFile = unique.Make(libpf.FrameMappingFileData{
 		FileID:     fileID,
 		FileName:   libpf.Intern(baseName),
 		GnuBuildID: gnuBuildID,
+		GoBuildID:  goBuildID,
 	})
 
 	hostFileID := host.FileIDFromLibpf(fileID)

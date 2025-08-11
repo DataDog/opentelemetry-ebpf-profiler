@@ -27,7 +27,6 @@ import (
 
 // GetMappings returns this error when no mappings can be extracted.
 var ErrNoMappings = errors.New("no mappings")
-var selfPid = os.Getpid()
 
 // systemProcess provides an implementation of the Process interface for a
 // process that is currently running on this machine.
@@ -370,39 +369,4 @@ func (sp *systemProcess) OpenELF(file string) (*pfelf.File, error) {
 
 func (sp *systemProcess) ExtractAsFile(file string) (string, error) {
 	return path.Join("/proc", strconv.Itoa(int(sp.pid)), "root", file), nil
-}
-
-type ReaderWithDummyClose struct {
-	io.ReaderAt
-}
-
-func (r *ReaderWithDummyClose) Close() error {
-	return nil
-}
-
-func (sp *systemProcess) Open(file string) (ReadAtCloser, string, error) {
-	// Always open via map_files as it can open deleted files if available.
-	// No fallback is attempted:
-	// - if the process exited, the fallback will error also (/proc/>PID> is gone)
-	// - if the error is due to ELF content, same error will occur in both cases
-	// - if the process unmapped the ELF, its data is no longer needed
-	if m, ok := sp.fileToMapping[file]; ok {
-		if m.IsVDSO() {
-			vdso, err := sp.extractMapping(m)
-			if err != nil {
-				return nil, "", fmt.Errorf("failed to extract VDSO: %v", err)
-			}
-			return &ReaderWithDummyClose{vdso}, "", nil
-		}
-		path := sp.getMappingFile(m)
-		f, err := os.Open(path)
-		return f, fmt.Sprintf("/proc/%v/fd/%v", selfPid, f.Fd()), err
-	}
-
-	path, err := sp.ExtractAsFile(file)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to extract file: %v", err)
-	}
-	f, err := os.Open(path)
-	return f, fmt.Sprintf("/proc/%v/fd/%v", selfPid, f.Fd()), err
 }
