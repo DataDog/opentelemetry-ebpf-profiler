@@ -391,7 +391,7 @@ func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.Mappin
 	if pm.exeReporter != nil {
 		pm.exeReporter.ReportExecutable(&reporter.ExecutableMetadata{
 			MappingFile:       info.mappingFile,
-			Process:           pr,
+			Opener:            pr,
 			Mapping:           mapping,
 			DebuglinkFileName: ef.DebuglinkFileName(elfRef.FileName(), elfRef),
 		})
