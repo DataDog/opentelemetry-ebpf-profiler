@@ -157,7 +157,8 @@ type Config struct {
 	UProbeLinks []string
 	// LoadProbe inidicates whether the generic eBPF program should be loaded
 	// without being attached to something.
-	LoadProbe bool
+	LoadProbe      bool
+	FrameCacheSize int
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -224,7 +225,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		ebpfHandler, cfg.TraceReporter, cfg.ExecutableReporter,
 		elfunwindinfo.NewStackDeltaProvider(),
-		cfg.FilterErrorFrames, cfg.IncludeEnvVars)
+		cfg.FilterErrorFrames, cfg.IncludeEnvVars, cfg.FrameCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}

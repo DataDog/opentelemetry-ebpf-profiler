@@ -40,7 +40,7 @@ const (
 	elfInfoCacheTTL = 6 * time.Hour
 
 	// Maximum size of the LRU cache for frames.
-	frameCacheSize = 16384
+	defaultFrameCacheSize = 16384
 
 	// TTL of entries in the frame cache.
 	frameCacheLifetime = 5 * time.Minute
@@ -60,7 +60,7 @@ var (
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
 	ebpf pmebpf.EbpfHandler, traceReporter reporter.TraceReporter,
 	exeReporter reporter.ExecutableReporter, sdp nativeunwind.StackDeltaProvider,
-	filterErrorFrames bool, includeEnvVars libpf.Set[string]) (*ProcessManager, error) {
+	filterErrorFrames bool, includeEnvVars libpf.Set[string], frameCacheSize int) (*ProcessManager, error) {
 	if exeReporter == nil {
 		exeReporter = executableReporterStub{}
 	}
@@ -72,11 +72,18 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 	}
 	elfInfoCache.SetLifetime(elfInfoCacheTTL)
 
-	frameCache, err := lru.New[frameCacheKey, libpf.Frames](frameCacheSize, hashFrameCacheKey)
-	if err != nil {
-		return nil, err
+	if frameCacheSize < 0 {
+		frameCacheSize = defaultFrameCacheSize
 	}
-	frameCache.SetLifetime(frameCacheLifetime)
+	log.Infof("Frame cache size: %d", frameCacheSize)
+	var frameCache *lru.LRU[frameCacheKey, libpf.Frames]
+	if frameCacheSize > 0 {
+		frameCache, err = lru.New[frameCacheKey, libpf.Frames](uint32(frameCacheSize), hashFrameCacheKey)
+		if err != nil {
+			return nil, err
+		}
+		frameCache.SetLifetime(frameCacheLifetime)
+	}
 
 	em, err := eim.NewExecutableInfoManager(sdp, ebpf, includeTracers)
 	if err != nil {
@@ -154,8 +161,15 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 		summary[metrics.IDELFInfoCacheHit] = metrics.MetricValue(pm.elfInfoCacheHit.Swap(0))
 		summary[metrics.IDELFInfoCacheMiss] = metrics.MetricValue(pm.elfInfoCacheMiss.Swap(0))
 
-		summary[metrics.IDTraceCacheHit] = metrics.MetricValue(pm.frameCacheHit.Swap(0))
-		summary[metrics.IDTraceCacheMiss] = metrics.MetricValue(pm.frameCacheMiss.Swap(0))
+		if pm.frameCache != nil {
+			cacheHit := pm.frameCacheHit.Swap(0)
+			cacheMiss := pm.frameCacheMiss.Swap(0)
+			log.Infof("Frame cache hitrate: %d/%d (%.2f%%), size: %d", cacheHit, cacheHit+cacheMiss, float64(cacheHit)/(float64(cacheHit+cacheMiss))*100, pm.frameCache.Len())
+			summary[metrics.IDTraceCacheHit] =
+				metrics.MetricValue(cacheHit)
+			summary[metrics.IDTraceCacheMiss] =
+				metrics.MetricValue(cacheMiss)
+		}
 
 		summary[metrics.IDErrProcNotExist] = metrics.MetricValue(pm.mappingStats.errProcNotExist.Swap(0))
 		summary[metrics.IDErrProcESRCH] = metrics.MetricValue(pm.mappingStats.errProcESRCH.Swap(0))
@@ -342,15 +356,20 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 			// specific to the PID.
 			key.PID = pid
 		}
-		if cached, ok := pm.frameCache.GetAndRefresh(key, frameCacheLifetime); ok {
-			// Fast path
-			cacheHit++
-			trace.Frames = append(trace.Frames, cached...)
+		if pm.frameCache == nil {
+			pm.convertFrame(pid, frame, &trace.Frames)
 		} else {
-			// Slow path: convert trace.
-			if pm.convertFrame(pid, frame, &trace.Frames) {
-				cacheMiss++
-				pm.frameCache.Add(key, slices.Clone(trace.Frames[oldLen:len(trace.Frames)]))
+			if cached, ok := pm.frameCache.GetAndRefresh(key, frameCacheLifetime); ok {
+				// Fast path
+				cacheHit++
+				pm.frameCacheHit.Add(1)
+				trace.Frames = append(trace.Frames, cached...)
+			} else {
+				// Slow path: convert trace.
+				if pm.convertFrame(pid, frame, &trace.Frames) {
+					cacheMiss++
+					pm.frameCache.Add(key, slices.Clone(trace.Frames[oldLen:len(trace.Frames)]))
+				}
 			}
 		}
 	}
