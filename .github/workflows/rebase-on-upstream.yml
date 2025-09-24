@@ -57,7 +57,7 @@ jobs:
           fi
 
           # Check that PR build is successful, sdm policy check is a bit different from the others
-          unsuccessful_check_count=$(jq '[.[0] | .statusCheckRollup | .[] | select(.workflowName != null and (.status != "COMPLETED" or .conclusion != "SUCCESS") or (.context != null and .state != "SUCCESS"))] | length' pr.json)
+          unsuccessful_check_count=$(jq '[.[0] | .statusCheckRollup | .[] | select(.workflowName != null and (.status != "COMPLETED" or (.conclusion != "SUCCESS" and .conclusion != "SKIPPED")) or (.context != null and .state != "SUCCESS"))] | length' pr.json)
           if [[ "$unsuccessful_check_count" -gt 0 ]]; then
             echo "PR build is not successful"
             exit 1
