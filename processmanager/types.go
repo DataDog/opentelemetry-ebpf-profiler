@@ -71,8 +71,10 @@ type ProcessManager struct {
 	elfInfoCacheMiss atomic.Uint64
 
 	// frame conversion
-	frameCacheHit  atomic.Uint64
-	frameCacheMiss atomic.Uint64
+	frameCacheHit        atomic.Uint64
+	frameCacheMiss       atomic.Uint64
+	frameCacheMissNoSymb atomic.Uint64
+	framesAddedToCache   atomic.Uint64
 
 	// mappingStats are statistics for parsing process mappings
 	mappingStats struct {

@@ -164,7 +164,11 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 		if pm.frameCache != nil {
 			cacheHit := pm.frameCacheHit.Swap(0)
 			cacheMiss := pm.frameCacheMiss.Swap(0)
-			log.Infof("Frame cache hitrate: %d/%d (%.2f%%), size: %d", cacheHit, cacheHit+cacheMiss, float64(cacheHit)/(float64(cacheHit+cacheMiss))*100, pm.frameCache.Len())
+			cacheMissNoSymb := pm.frameCacheMissNoSymb.Swap(0)
+			framesAddedToCache := pm.framesAddedToCache.Swap(0)
+
+			log.Infof("Frame cache hitrate: %d/%d (%.2f%%), convertTraceNoSymbolization: %d, framesAddedToCache: %d, size: %d",
+				cacheHit, cacheHit+cacheMiss, float64(cacheHit)/(float64(cacheHit+cacheMiss))*100, cacheMissNoSymb, framesAddedToCache, pm.frameCache.Len())
 			summary[metrics.IDTraceCacheHit] =
 				metrics.MetricValue(cacheHit)
 			summary[metrics.IDTraceCacheMiss] =
@@ -332,7 +336,9 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 	copy(trace.Frames, bpfTrace.KernelFrames)
 
 	cacheMiss := uint64(0)
+	cacheMissNoSymb := uint64(0)
 	cacheHit := uint64(0)
+	framesAddedToCache := uint64(0)
 
 	for i := range bpfTrace.Frames {
 		frame := &bpfTrace.Frames[i]
@@ -362,13 +368,15 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 			if cached, ok := pm.frameCache.GetAndRefresh(key, frameCacheLifetime); ok {
 				// Fast path
 				cacheHit++
-				pm.frameCacheHit.Add(1)
 				trace.Frames = append(trace.Frames, cached...)
 			} else {
 				// Slow path: convert trace.
 				if pm.convertFrame(pid, frame, &trace.Frames) {
 					cacheMiss++
+					framesAddedToCache += uint64(len(trace.Frames) - oldLen)
 					pm.frameCache.Add(key, slices.Clone(trace.Frames[oldLen:len(trace.Frames)]))
+				} else {
+					cacheMissNoSymb++
 				}
 			}
 		}
@@ -378,6 +386,12 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *host.Trace) {
 	}
 	if cacheHit != 0 {
 		pm.frameCacheHit.Add(cacheHit)
+	}
+	if cacheMissNoSymb != 0 {
+		pm.frameCacheMissNoSymb.Add(cacheMissNoSymb)
+	}
+	if framesAddedToCache != 0 {
+		pm.framesAddedToCache.Add(framesAddedToCache)
 	}
 	pm.mu.RLock()
 	// Release resources that were used to symbolize this stack.
