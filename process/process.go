@@ -158,6 +158,8 @@ func parseContainerID(cgroupFile io.Reader) libpf.String {
 // extractContainerID returns the containerID for pid if cgroup v2 is used.
 func extractContainerID(pid libpf.PID) (libpf.String, error) {
 	cgroupFile, err := os.Open(fmt.Sprintf("/proc/%d/cgroup", pid))
+	defer cgroupFile.Close()
+	log.Debugf("Reading cgroup file for PID %d", pid)
 	if err != nil {
 		return libpf.NullString, err
 	}
