@@ -17,6 +17,14 @@ bpf_map_def SEC("maps") per_cpu_records = {
   .max_entries = 1,
 };
 
+// per_cpu_counters maps counter ID to a value
+bpf_map_def SEC("maps") per_cpu_counters = {
+  .type        = BPF_MAP_TYPE_PERCPU_ARRAY,
+  .key_size    = sizeof(u32),
+  .value_size  = sizeof(u64),
+  .max_entries = 3,
+};
+
 // metrics maps metric ID to a value
 bpf_map_def SEC("maps") metrics = {
   .type        = BPF_MAP_TYPE_PERCPU_ARRAY,

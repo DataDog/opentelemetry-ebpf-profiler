@@ -643,4 +643,96 @@ int native_tracer_entry(struct bpf_perf_event_data *ctx)
   u64 ts = bpf_ktime_get_ns();
   return collect_trace((struct pt_regs *)&ctx->regs, TRACE_SAMPLING, pid, tid, ts, 0);
 }
+
+
+SEC("perf_event/native_tracer_entry_event1")
+int native_tracer_entry_event1(struct bpf_perf_event_data *ctx)
+{
+  // Get the PID and TGID register.
+  u64 id  = bpf_get_current_pid_tgid();
+  u32 pid = id >> 32;
+  u32 tid = id & 0xFFFFFFFF;
+
+  if (pid == 0) {
+    return 0;
+  }
+
+  struct bpf_perf_event_value value_buf;
+  bpf_perf_prog_read_value(ctx, &value_buf, sizeof(value_buf));
+
+  int key0 = 0;
+  u64 old_value = 0;
+  u64 *value0 = bpf_map_lookup_elem(&per_cpu_counters, &key0);
+  if (!value0) {
+    return 0;
+  }
+
+  old_value = *value0;
+  u64 value = value_buf.counter - old_value;
+  *value0 = value_buf.counter;
+
+  u64 ts = bpf_ktime_get_ns();
+  return collect_trace((struct pt_regs *)&ctx->regs, TRACE_EVENT_1, pid, tid, ts, value);
+}
+
+SEC("perf_event/native_tracer_entry_event2")
+int native_tracer_entry_event2(struct bpf_perf_event_data *ctx)
+{
+  // Get the PID and TGID register.
+  u64 id  = bpf_get_current_pid_tgid();
+  u32 pid = id >> 32;
+  u32 tid = id & 0xFFFFFFFF;
+
+  if (pid == 0) {
+    return 0;
+  }
+
+  struct bpf_perf_event_value value_buf;
+  bpf_perf_prog_read_value(ctx, &value_buf, sizeof(value_buf));
+
+  int key0 = 1;
+  u64 old_value = 0;
+  u64 *value0 = bpf_map_lookup_elem(&per_cpu_counters, &key0);
+  if (!value0) {
+    return 0;
+  }
+
+  old_value = *value0;
+  u64 value = value_buf.counter - old_value;
+  *value0 = value_buf.counter;
+
+  u64 ts = bpf_ktime_get_ns();
+  return collect_trace((struct pt_regs *)&ctx->regs, TRACE_EVENT_2, pid, tid, ts, value);
+}
+
+SEC("perf_event/native_tracer_entry_event3")
+int native_tracer_entry_event3(struct bpf_perf_event_data *ctx)
+{
+  // Get the PID and TGID register.
+  u64 id  = bpf_get_current_pid_tgid();
+  u32 pid = id >> 32;
+  u32 tid = id & 0xFFFFFFFF;
+
+  if (pid == 0) {
+    return 0;
+  }
+
+  struct bpf_perf_event_value value_buf;
+  bpf_perf_prog_read_value(ctx, &value_buf, sizeof(value_buf));
+
+  int key0 = 2;
+  u64 old_value = 0;
+  u64 *value0 = bpf_map_lookup_elem(&per_cpu_counters, &key0);
+  if (!value0) {
+    return 0;
+  }
+
+  old_value = *value0;
+  u64 value = value_buf.counter - old_value;
+  *value0 = value_buf.counter;
+
+  u64 ts = bpf_ktime_get_ns();
+  return collect_trace((struct pt_regs *)&ctx->regs, TRACE_EVENT_3, pid, tid, ts, value);
+}
+
 MULTI_USE_FUNC(unwind_native)

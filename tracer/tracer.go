@@ -129,6 +129,8 @@ type Tracer struct {
 
 	// probabilisticThreshold holds the threshold for probabilistic profiling.
 	probabilisticThreshold uint
+
+	customEventCount int
 }
 
 type Config struct {
@@ -601,6 +603,21 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 			name:             "native_tracer_entry",
 			noTailCallTarget: true,
 			enable:           true,
+		},
+		progLoaderHelper{
+			name:             "native_tracer_entry_event1",
+			noTailCallTarget: true,
+			enable:           true,
+		},
+		progLoaderHelper{
+			name:             "native_tracer_entry_event2",
+			noTailCallTarget: true,
+			enable:           true,
+		},
+		progLoaderHelper{
+			name:             "native_tracer_entry_event3",
+			noTailCallTarget: true,
+			enable:           true,
 		})
 
 	for _, unwindProg := range progs {
@@ -995,7 +1012,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		EnvVars:          procMeta.EnvVariables,
 	}
 
-	if trace.Origin != support.TraceOriginSampling && trace.Origin != support.TraceOriginOffCPU {
+	if trace.Origin <= support.TraceOriginUnknown || trace.Origin > support.TraceOriginEvent3 {
 		log.Warnf("Skip handling trace from unexpected %d origin", trace.Origin)
 		return nil
 	}
@@ -1215,6 +1232,39 @@ func (t *Tracer) AttachTracer() error {
 		}
 		*events = append(*events, perfEvent)
 	}
+	return nil
+}
+
+func (t *Tracer) AttachTracerCustomEvent(perfAttribute *perf.Attr) error {
+	if t.customEventCount > 3 {
+		return errors.New("too many custom events")
+	}
+
+	entryProgName := fmt.Sprintf("native_tracer_entry_event%d", t.customEventCount+1)
+	tracerProg, ok := t.ebpfProgs[entryProgName]
+	if !ok {
+		return fmt.Errorf("entry program %s is not available", entryProgName)
+	}
+
+	onlineCPUIDs, err := getOnlineCPUIDs()
+	if err != nil {
+		return fmt.Errorf("failed to get online CPUs: %v", err)
+	}
+
+	events := t.perfEntrypoints.WLock()
+	defer t.perfEntrypoints.WUnlock(&events)
+	for _, id := range onlineCPUIDs {
+		perfEvent, err := perf.Open(perfAttribute, perf.AllThreads, id, nil)
+		if err != nil {
+			return fmt.Errorf("failed to attach to perf event on CPU %d: %v", id, err)
+		}
+		if err := perfEvent.SetBPF(uint32(tracerProg.FD())); err != nil {
+			return fmt.Errorf("failed to attach eBPF program to perf event: %v", err)
+		}
+		*events = append(*events, perfEvent)
+	}
+
+	t.customEventCount++
 	return nil
 }
 

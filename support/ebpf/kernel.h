@@ -119,6 +119,12 @@ struct bpf_perf_event_data {
   struct pt_regs regs;
 };
 
+struct bpf_perf_event_value {
+	u64 counter;
+	u64 enabled;
+	u64 running;
+};
+
 // The following works with clang and gcc.
 // Checked with
 //    clang -dM -E -x c /dev/null | grep ENDI
