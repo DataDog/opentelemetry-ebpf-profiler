@@ -257,10 +257,12 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
 
   trace->apm_trace_id.as_int.hi    = 0;
   trace->apm_trace_id.as_int.lo    = 0;
+  trace->apm_span_id.as_int        = 0;
   trace->apm_transaction_id.as_int = 0;
 
-  trace->custom_labels.len = 0;
-  u64 *labels_space        = (u64 *)&trace->custom_labels.labels;
+  trace->custom_labels_type = CUSTOM_LABELS_TYPE_NONE;
+  trace->custom_labels.len  = 0;
+  u64 *labels_space         = (u64 *)&trace->custom_labels.labels;
   // I'm not sure this is necessary since we only increment len after
   // we successfully write the label.
   UNROLL for (int i = 0; i < sizeof(CustomLabel) * MAX_CUSTOM_LABELS / 8; i++)

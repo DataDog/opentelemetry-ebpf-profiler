@@ -8,10 +8,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"time"
 	"unsafe"
@@ -956,14 +959,40 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		}
 	}
 
-	if ptr.Custom_labels.Len > 0 {
-		trace.CustomLabels = make(map[libpf.String]libpf.String, int(ptr.Custom_labels.Len))
-		for i := 0; i < int(ptr.Custom_labels.Len); i++ {
-			lbl := ptr.Custom_labels.Labels[i]
-			key := goString(lbl.Key[:])
-			val := goString(lbl.Val[:])
-			trace.CustomLabels[key] = val
+	switch ptr.Custom_labels_type {
+	case support.CustomLabelsTypeGo:
+		customLabels := (*support.CustomLabelsArray)(unsafe.Pointer(&ptr.Custom_labels_data))
+		if customLabels.Len > 0 {
+			trace.CustomLabels = make(map[libpf.String]libpf.String, int(customLabels.Len))
+			for i := 0; i < int(customLabels.Len); i++ {
+				lbl := customLabels.Labels[i]
+				key := goString(lbl.Key[:])
+				val := goString(lbl.Val[:])
+				trace.CustomLabels[key] = val
+			}
 		}
+	case support.CustomLabelsTypeNative:
+		trace.CustomLabels = decodeCustomLabels(ptr.Custom_labels_data[:])
+	}
+
+	if ptr.Apm_span_id != libpf.InvalidAPMSpanID {
+		if trace.CustomLabels == nil {
+			trace.CustomLabels = make(map[libpf.String]libpf.String)
+		}
+
+		spanID := binary.LittleEndian.Uint64(ptr.Apm_span_id[:])
+		trace.CustomLabels[libpf.Intern("span id")] = libpf.Intern(strconv.FormatUint(spanID, 10))
+
+		if ptr.Apm_transaction_id != libpf.InvalidAPMSpanID {
+			rootSpanID := binary.LittleEndian.Uint64(ptr.Apm_transaction_id[:])
+			trace.CustomLabels[libpf.Intern("local root span id")] = libpf.Intern(strconv.FormatUint(rootSpanID, 10))
+		}
+
+		if ptr.Apm_trace_id != libpf.InvalidAPMTraceID {
+			trace.CustomLabels[libpf.Intern("trace id")] = libpf.Intern(hex.EncodeToString(ptr.Apm_trace_id[:]))
+		}
+
+		log.Infof("Custom labels: %v", trace.CustomLabels)
 	}
 
 	trace.Frames = make([]host.Frame, ptr.Stack_len)
@@ -1205,4 +1234,26 @@ func (t *Tracer) AttachProbes(probes []string) error {
 
 func (t *Tracer) HandleTrace(bpfTrace *host.Trace) {
 	t.processManager.HandleTrace(bpfTrace)
+}
+
+func decodeCustomLabels(data []byte) map[libpf.String]libpf.String {
+	count := int(data[0])
+	customLabels := make(map[libpf.String]libpf.String, count)
+	decoded := 0
+	data = data[1:]
+	for len(data) >= 2 {
+		valueLen := int(data[1])
+		if len(data) < 2+valueLen {
+			break
+		}
+		val := data[2 : 2+valueLen]
+		keyStr := libpf.Intern(fmt.Sprintf("#%d", data[0]))
+		customLabels[keyStr] = libpf.Intern(pfunsafe.ToString(val))
+		decoded++
+		if decoded >= count {
+			break
+		}
+		data = data[2+valueLen:]
+	}
+	return customLabels
 }

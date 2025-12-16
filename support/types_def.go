@@ -105,6 +105,12 @@ const (
 	TraceOriginProbe    = C.TRACE_PROBE
 )
 
+const (
+	CustomLabelsTypeNone   = C.CUSTOM_LABELS_TYPE_NONE
+	CustomLabelsTypeNative = C.CUSTOM_LABELS_TYPE_NATIVE
+	CustomLabelsTypeGo     = C.CUSTOM_LABELS_TYPE_GO
+)
+
 type ApmSpanID C.ApmSpanID
 type ApmTraceID C.ApmTraceID
 type CustomLabel C.CustomLabel
@@ -124,6 +130,7 @@ type UnwindInfo C.UnwindInfo
 
 type ApmIntProcInfo C.ApmIntProcInfo
 type BEAMProcInfo C.BEAMProcInfo
+type CustomLabelsProcInfo C.CustomLabelsProcInfo
 type DotnetProcInfo C.DotnetProcInfo
 type GoLabelsOffsets C.GoLabelsOffsets
 type HotspotProcInfo C.HotspotProcInfo

@@ -561,6 +561,13 @@ typedef struct __attribute__((packed)) ApmCorrelationBuf {
   ApmSpanID transaction_id;
 } ApmCorrelationBuf;
 
+typedef struct CustomLabelsBuf {
+  ApmTraceID trace_id;
+  ApmSpanID span_id;
+  ApmSpanID root_span_id;
+  u8 valid;
+} CustomLabelsBuf;
+
 #define CUSTOM_LABEL_MAX_KEY_LEN COMM_LEN
 // Big enough to hold UUIDs, etc.
 #define CUSTOM_LABEL_MAX_VAL_LEN 48
@@ -577,6 +584,12 @@ typedef struct CustomLabelsArray {
   CustomLabel labels[MAX_CUSTOM_LABELS];
 } CustomLabelsArray;
 
+enum CustomLabelsType {
+  CUSTOM_LABELS_TYPE_NONE,
+  CUSTOM_LABELS_TYPE_NATIVE,
+  CUSTOM_LABELS_TYPE_GO,
+};
+
 // Container for a stack trace
 typedef struct Trace {
   // The process ID
@@ -591,10 +604,17 @@ typedef struct Trace {
   u8 comm[COMM_LEN];
   // APM transaction ID or all-zero if not present.
   ApmSpanID apm_transaction_id;
+  // APM span ID or all-zero if not present.
+  ApmSpanID apm_span_id;
   // APM trace ID or all-zero if not present.
   ApmTraceID apm_trace_id;
-  // Custom Labels
-  CustomLabelsArray custom_labels;
+  // Custom labels type (Native or Go)
+  u8 custom_labels_type;
+  union {
+    // Custom labels data
+    u8 custom_labels_data[sizeof(CustomLabelsArray)];
+    CustomLabelsArray custom_labels;
+  };
   // The kernel stack ID.
   s32 kernel_stack_id;
   // The number of frames in the stack.
@@ -942,6 +962,10 @@ typedef struct PIDPageMappingInfo {
 typedef struct ApmIntProcInfo {
   u64 tls_offset;
 } ApmIntProcInfo;
+
+typedef struct CustomLabelsProcInfo {
+  u64 tls_offset;
+} CustomLabelsProcInfo;
 
 typedef struct GoLabelsOffsets {
   u32 m_offset;

@@ -132,6 +132,13 @@ struct go_labels_procs_t {
   __uint(max_entries, 128);
 } go_labels_procs SEC(".maps");
 
+struct custom_labels_procs_t {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __type(key, pid_t);
+  __type(value, CustomLabelsProcInfo);
+  __uint(max_entries, 128);
+} custom_labels_procs SEC(".maps");
+
 // filter_error_frames is set during load time.
 BPF_RODATA_VAR(bool, filter_error_frames, false)
 
@@ -244,6 +251,59 @@ static EBPF_INLINE void maybe_add_apm_info(Trace *trace)
     corr_buf.trace_flags);
 }
 
+static EBPF_INLINE void maybe_add_custom_labels_info(Trace *trace)
+{
+  u32 pid                    = trace->pid; // verifier needs this to be on stack on 4.15 kernel
+  CustomLabelsProcInfo *proc = bpf_map_lookup_elem(&custom_labels_procs, &pid);
+  if (!proc) {
+    return;
+  }
+  u64 tsd_base;
+  if (tsd_get_base((void **)&tsd_base) != 0) {
+    increment_metric(metricID_UnwindApmIntErrReadTsdBase);
+    DEBUG_PRINT("Failed to get TSD base for APM integration");
+    return;
+  }
+
+  DEBUG_PRINT("Custom labels ptr should be at 0x%llx", tsd_base + proc->tls_offset);
+
+  void *custom_labels_buf_ptr;
+  if (bpf_probe_read_user(
+        &custom_labels_buf_ptr,
+        sizeof(custom_labels_buf_ptr),
+        (void *)(tsd_base + proc->tls_offset))) {
+    increment_metric(metricID_UnwindApmIntErrReadCorrBufPtr);
+    DEBUG_PRINT("Failed to read custom labels buffer pointer");
+    return;
+  }
+
+  CustomLabelsBuf custom_labels_buf;
+  if (bpf_probe_read_user(&custom_labels_buf, sizeof(custom_labels_buf), custom_labels_buf_ptr)) {
+    increment_metric(metricID_UnwindApmIntErrReadCorrBuf);
+    DEBUG_PRINT("Failed to read custom labels buffer");
+    return;
+  }
+
+  if (custom_labels_buf.valid) {
+    trace->apm_trace_id.as_int.hi    = custom_labels_buf.trace_id.as_int.hi;
+    trace->apm_trace_id.as_int.lo    = custom_labels_buf.trace_id.as_int.lo;
+    trace->apm_transaction_id.as_int = custom_labels_buf.root_span_id.as_int;
+    trace->apm_span_id.as_int        = custom_labels_buf.span_id.as_int;
+  }
+
+  if (!bpf_probe_read_user(
+        &trace->custom_labels_data,
+        sizeof(trace->custom_labels_data),
+        custom_labels_buf_ptr + sizeof(custom_labels_buf))) {
+    trace->custom_labels_type = CUSTOM_LABELS_TYPE_NATIVE;
+  }
+
+  increment_metric(metricID_UnwindApmIntReadSuccesses);
+
+  // WARN: we print this as little endian
+  DEBUG_PRINT("APM transaction ID: %016llX", trace->apm_transaction_id.as_int);
+}
+
 // unwind_stop is the tail call destination for PROG_UNWIND_STOP.
 static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
 {
@@ -253,6 +313,7 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   Trace *trace       = &record->trace;
   UnwindState *state = &record->state;
 
+  maybe_add_custom_labels_info(trace);
   maybe_add_apm_info(trace);
 
   // If the stack is otherwise empty, push an error for that: we should
