@@ -674,6 +674,27 @@ const (
 	// Number of prctl(PR_SET_VMA) calls naming an anonymous mapping OTEL_CTX
 	IDNumPrctlSetVmaOtelCtx = 295
 
+	// Number of failures to get TSD base for thread context
+	IDUnwindThreadContextErrReadTsdBase = 296
+
+	// Number of failures to read the thread context buffer pointer
+	IDUnwindThreadContextErrReadThreadCtxBufPtr = 297
+
+	// Number of failures to read the thread context buffer
+	IDUnwindThreadContextErrReadThreadCtxBuf = 298
+
+	// Number of failures to read the thread context attributes
+	IDUnwindThreadContextErrReadThreadCtxAttrs = 299
+
+	// Number of failures to read the DTV pointer
+	IDUnwindThreadContextErrReadDtvPtr = 300
+
+	// Number of failures to read the module TLS base
+	IDUnwindThreadContextErrReadModuleTlsBase = 301
+
+	// Number of successful reads of thread context info
+	IDUnwindThreadContextReadSuccesses = 302
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 296
+	IDMax = 303
 )
