@@ -258,11 +258,27 @@ static EBPF_INLINE void maybe_add_custom_labels_info(Trace *trace)
   if (!proc) {
     return;
   }
+
   u64 tsd_base;
   if (tsd_get_base((void **)&tsd_base) != 0) {
     increment_metric(metricID_UnwindApmIntErrReadTsdBase);
     DEBUG_PRINT("Failed to get TSD base for APM integration");
     return;
+  }
+
+  if (proc->dtv_offset != 0) {
+    // dynamic TLS is used, base address is dtv[module_id]
+    // dtv is at offset 8 from tsd_base
+    u64 dtv_ptr;
+    if (bpf_probe_read_user(&dtv_ptr, sizeof(dtv_ptr), (void *)(tsd_base + proc->dtv_offset))) {
+      DEBUG_PRINT("Failed to read DTV pointer");
+      return;
+    }
+
+    if (bpf_probe_read_user(&tsd_base, sizeof(tsd_base), (void *)(dtv_ptr + proc->module_offset))) {
+      DEBUG_PRINT("Failed to read module TLS base from DTV");
+      return;
+    }
   }
 
   DEBUG_PRINT("Custom labels ptr should be at 0x%llx", tsd_base + proc->tls_offset);
@@ -284,20 +300,22 @@ static EBPF_INLINE void maybe_add_custom_labels_info(Trace *trace)
     return;
   }
 
-  if (custom_labels_buf.valid) {
-    trace->apm_trace_id.as_int.hi    = custom_labels_buf.trace_id.as_int.hi;
-    trace->apm_trace_id.as_int.lo    = custom_labels_buf.trace_id.as_int.lo;
-    trace->apm_transaction_id.as_int = custom_labels_buf.root_span_id.as_int;
-    trace->apm_span_id.as_int        = custom_labels_buf.span_id.as_int;
+  if (!custom_labels_buf.valid) {
+    return;
   }
 
+  trace->apm_trace_id.as_int.hi    = custom_labels_buf.trace_id.as_int.hi;
+  trace->apm_trace_id.as_int.lo    = custom_labels_buf.trace_id.as_int.lo;
+  trace->apm_transaction_id.as_int = custom_labels_buf.root_span_id.as_int;
+  trace->apm_span_id.as_int        = custom_labels_buf.span_id.as_int;
+  
   if (!bpf_probe_read_user(
         &trace->custom_labels_data,
         sizeof(trace->custom_labels_data),
         custom_labels_buf_ptr + sizeof(custom_labels_buf))) {
-    trace->custom_labels_type = CUSTOM_LABELS_TYPE_NATIVE;
+    trace->custom_labels_type = CUSTOM_LABELS_TYPE_NATIVE;    
   }
-
+  
   increment_metric(metricID_UnwindApmIntReadSuccesses);
 
   // WARN: we print this as little endian

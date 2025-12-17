@@ -115,6 +115,7 @@ type ApmSpanID C.ApmSpanID
 type ApmTraceID C.ApmTraceID
 type CustomLabel C.CustomLabel
 type CustomLabelsArray C.CustomLabelsArray
+type DTVInfo C.DTVInfo
 type Event C.Event
 type Frame C.Frame
 type OffsetRange C.OffsetRange

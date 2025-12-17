@@ -406,6 +406,11 @@ typedef struct TSDInfo {
   u8 indirect;
 } TSDInfo;
 
+typedef struct DTVInfo {
+  s16 offset;
+  u8 multiplier;
+} DTVInfo;
+
 // DotnetProcInfo is a container for the data needed to build stack trace for a dotnet process.
 typedef struct DotnetProcInfo {
   u32 version;
@@ -561,7 +566,7 @@ typedef struct __attribute__((packed)) ApmCorrelationBuf {
   ApmSpanID transaction_id;
 } ApmCorrelationBuf;
 
-typedef struct CustomLabelsBuf {
+typedef struct __attribute__((packed)) CustomLabelsBuf {
   ApmTraceID trace_id;
   ApmSpanID span_id;
   ApmSpanID root_span_id;
@@ -964,7 +969,9 @@ typedef struct ApmIntProcInfo {
 } ApmIntProcInfo;
 
 typedef struct CustomLabelsProcInfo {
-  u64 tls_offset;
+  s32 tls_offset;
+  s32 dtv_offset;
+  s32 module_offset;
 } CustomLabelsProcInfo;
 
 typedef struct GoLabelsOffsets {

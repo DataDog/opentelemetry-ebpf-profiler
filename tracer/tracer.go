@@ -1238,10 +1238,17 @@ func (t *Tracer) HandleTrace(bpfTrace *host.Trace) {
 
 func decodeCustomLabels(data []byte) map[libpf.String]libpf.String {
 	count := int(data[0])
+	if count == 0 {
+		return nil
+	}
+
 	customLabels := make(map[libpf.String]libpf.String, count)
 	decoded := 0
 	data = data[1:]
 	for len(data) >= 2 {
+		if decoded >= count {
+			break
+		}
 		valueLen := int(data[1])
 		if len(data) < 2+valueLen {
 			break
@@ -1250,9 +1257,6 @@ func decodeCustomLabels(data []byte) map[libpf.String]libpf.String {
 		keyStr := libpf.Intern(fmt.Sprintf("#%d", data[0]))
 		customLabels[keyStr] = libpf.Intern(pfunsafe.ToString(val))
 		decoded++
-		if decoded >= count {
-			break
-		}
 		data = data[2+valueLen:]
 	}
 	return customLabels

@@ -110,6 +110,11 @@ type CustomLabelsArray struct {
 	Len    uint32
 	Labels [10]CustomLabel
 }
+type DTVInfo struct {
+	Offset     int16
+	Multiplier uint8
+	Pad_cgo_0  [1]byte
+}
 type Event struct {
 	Type uint32
 }
@@ -199,7 +204,9 @@ type BEAMProcInfo struct {
 	Pad_cgo_0              [6]byte
 }
 type CustomLabelsProcInfo struct {
-	Offset uint64
+	Tls_offset    int32
+	Dtv_offset    int32
+	Module_offset int32
 }
 type DotnetProcInfo struct {
 	Version uint32
