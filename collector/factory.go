@@ -67,6 +67,7 @@ func BuildProfilesReceiver(options ...Option) xreceiver.CreateProfilesFunc {
 func defaultConfig() component.Config {
 	return &config.Config{
 		ReporterInterval:       5 * time.Second,
+		ReporterJitter:         0.2,
 		MonitorInterval:        5 * time.Second,
 		SamplesPerSecond:       20,
 		ProbabilisticInterval:  1 * time.Minute,
