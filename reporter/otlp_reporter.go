@@ -24,6 +24,9 @@ import (
 // Assert that we implement the full Reporter interface.
 var _ Reporter = (*OTLPReporter)(nil)
 
+// Assert that we implement the ProcessedUntilReporter interface.
+var _ ProcessedUntilReporter = (*OTLPReporter)(nil)
+
 var gzipOption = grpc.UseCompressor(gzip.Name)
 
 // OTLPReporter receives and transforms information to be OTLP/profiles compliant.
@@ -63,6 +66,7 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 			runLoop: &runLoop{
 				stopSignal: make(chan libpf.Void),
 			},
+			readyCh: make(chan struct{}, 1),
 		},
 		pkgGRPCOperationTimeout: cfg.GRPCOperationTimeout,
 		client:                  nil,
@@ -94,6 +98,8 @@ func (r *OTLPReporter) Start(ctx context.Context) error {
 	}, func() {
 		// Allow the GC to purge expired entries to avoid memory leaks.
 		r.pdata.Purge()
+	}, r.readyCh, func() {
+		r.trySendPending(ctx)
 	})
 
 	// When Stop() is called and a signal to 'stop' is received, then:
@@ -112,32 +118,47 @@ func (r *OTLPReporter) Start(ctx context.Context) error {
 
 // reportOTLPProfile creates and sends out an OTLP profile.
 func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
-	traceEventsPtr := r.traceEvents.WLock()
-	reportedEvents := (*traceEventsPtr)
-	newEvents := make(samples.TraceEventsTree)
-	*traceEventsPtr = newEvents
-	collectionEndTime := time.Now()
-	collectionStartTime := r.collectionStartTime
-	r.collectionStartTime = collectionEndTime
-	r.traceEvents.WUnlock(&traceEventsPtr)
+	toSend, sendImmediately := r.swapPendingReport()
 
-	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
-		collectionStartTime, collectionEndTime)
+	if toSend != nil {
+		r.sendPending(ctx, toSend)
+	}
+	if sendImmediately != nil {
+		r.sendPending(ctx, sendImmediately)
+	}
+	return nil
+}
+
+// trySendPending attempts to send the pending report if ProcessedUntil has passed its threshold.
+func (r *OTLPReporter) trySendPending(ctx context.Context) {
+	if pending := r.popPendingIfReady(); pending != nil {
+		r.sendPending(ctx, pending)
+	}
+}
+
+// sendPending sends a pending report (must be called WITHOUT holding pendingMu).
+func (r *OTLPReporter) sendPending(ctx context.Context, pending *pendingReport) {
+	profiles, err := r.pdata.Generate(pending.samples, r.name, r.version,
+		pending.startTime, pending.endTime)
 	if err != nil {
 		log.Errorf("pdata: %v", err)
-		return nil
+		return
 	}
+
 	if profiles.SampleCount() == 0 {
 		log.Debugf("Skip sending of OTLP profile with no samples")
-		return nil
+		return
 	}
 
 	req := pprofileotlp.NewExportRequestFromProfiles(profiles)
 
 	reqCtx, ctxCancel := context.WithTimeout(ctx, r.pkgGRPCOperationTimeout)
 	defer ctxCancel()
+
 	_, err = r.client.Export(reqCtx, req, gzipOption)
-	return err
+	if err != nil {
+		log.Errorf("Failed to send profile: %v", err)
+	}
 }
 
 // waitGrpcEndpoint waits until the gRPC connection is established.

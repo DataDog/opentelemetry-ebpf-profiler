@@ -17,7 +17,7 @@ type runLoop struct {
 }
 
 func (rl *runLoop) Start(ctx context.Context, reportInterval time.Duration, jitter float64,
-	run, purge func()) {
+	run, purge func(), readyCh <-chan struct{}, onReady func()) {
 	go func() {
 		tick := time.NewTicker(reportInterval)
 		defer tick.Stop()
@@ -35,6 +35,8 @@ func (rl *runLoop) Start(ctx context.Context, reportInterval time.Duration, jitt
 				tick.Reset(libpf.AddJitter(reportInterval, jitter))
 			case <-purgeTick.C:
 				purge()
+			case <-readyCh:
+				onReady()
 			}
 		}
 	}()

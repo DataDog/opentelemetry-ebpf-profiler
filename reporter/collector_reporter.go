@@ -19,6 +19,9 @@ import (
 // Assert that we implement the full Reporter interface.
 var _ Reporter = (*CollectorReporter)(nil)
 
+// Assert that we implement the ProcessedUntilReporter interface.
+var _ ProcessedUntilReporter = (*CollectorReporter)(nil)
+
 // CollectorReporter receives and transforms information to be Collector Collector compliant.
 type CollectorReporter struct {
 	*baseReporter
@@ -48,6 +51,7 @@ func NewCollector(cfg *Config, nextConsumer xconsumer.Profiles) (*CollectorRepor
 			runLoop: &runLoop{
 				stopSignal: make(chan libpf.Void),
 			},
+			readyCh: make(chan struct{}, 1),
 		},
 		nextConsumer: nextConsumer,
 	}, nil
@@ -66,11 +70,12 @@ func (r *CollectorReporter) Start(ctx context.Context) error {
 	}, func() {
 		// Allow the GC to purge expired entries to avoid memory leaks.
 		r.pdata.Purge()
+	}, r.readyCh, func() {
+		r.trySendPending(ctx)
 	})
 
 	// When Stop() is called and a signal to 'stop' is received, then:
 	// - cancel the reporting functions currently running (using context)
-	// - close the gRPC connection with collection-agent
 	go func() {
 		<-r.runLoop.stopSignal
 		cancelReporting()
@@ -81,26 +86,39 @@ func (r *CollectorReporter) Start(ctx context.Context) error {
 
 // reportProfile creates and sends out a profile.
 func (r *CollectorReporter) reportProfile(ctx context.Context) error {
-	traceEventsPtr := r.traceEvents.WLock()
-	reportedEvents := (*traceEventsPtr)
-	newEvents := make(samples.TraceEventsTree)
-	*traceEventsPtr = newEvents
-	collectionEndTime := time.Now()
-	collectionStartTime := r.collectionStartTime
-	r.collectionStartTime = collectionEndTime
-	r.traceEvents.WUnlock(&traceEventsPtr)
+	toSend, sendImmediately := r.swapPendingReport()
 
-	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
-		collectionStartTime, collectionEndTime)
+	if toSend != nil {
+		r.sendPending(ctx, toSend)
+	}
+	if sendImmediately != nil {
+		r.sendPending(ctx, sendImmediately)
+	}
+	return nil
+}
+
+// trySendPending attempts to send the pending report if ProcessedUntil has passed its threshold.
+func (r *CollectorReporter) trySendPending(ctx context.Context) {
+	if pending := r.popPendingIfReady(); pending != nil {
+		r.sendPending(ctx, pending)
+	}
+}
+
+// sendPending sends a pending report (must be called WITHOUT holding pendingMu).
+func (r *CollectorReporter) sendPending(ctx context.Context, pending *pendingReport) {
+	profiles, err := r.pdata.Generate(pending.samples, r.name, r.version,
+		pending.startTime, pending.endTime)
 	if err != nil {
 		log.Errorf("pdata: %v", err)
-		return nil
+		return
 	}
 
 	if profiles.SampleCount() == 0 {
 		log.Debugf("Skip sending profile with no samples")
-		return nil
+		return
 	}
 
-	return r.nextConsumer.ConsumeProfiles(ctx, profiles)
+	if err := r.nextConsumer.ConsumeProfiles(ctx, profiles); err != nil {
+		log.Errorf("Failed to send profile: %v", err)
+	}
 }

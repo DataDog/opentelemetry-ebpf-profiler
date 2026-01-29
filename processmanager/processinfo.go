@@ -736,6 +736,11 @@ func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID,
 }
 
 func (pm *ProcessManager) ProcessedUntil(traceCaptureKTime times.KTime) {
+	// Forward to reporter first, outside of pm.mu
+	if pur, ok := pm.traceReporter.(reporter.ProcessedUntilReporter); ok {
+		pur.ProcessedUntil(traceCaptureKTime)
+	}
+
 	var err error
 	defer func() {
 		if err != nil {

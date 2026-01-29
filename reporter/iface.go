@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+	"go.opentelemetry.io/ebpf-profiler/times"
 )
 
 // Reporter is the top-level interface implemented by a full reporter.
@@ -31,6 +32,14 @@ type TraceReporter interface {
 	// and enqueues it for reporting to the backend.
 	// If handling the trace event fails it returns an error.
 	ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error
+}
+
+// ProcessedUntilReporter is an optional interface that reporters can implement
+// to receive notifications about sample processing progress.
+type ProcessedUntilReporter interface {
+	// ProcessedUntil indicates all trace events with kernel timestamps <= ktime
+	// have been delivered to the reporter.
+	ProcessedUntil(ktime times.KTime)
 }
 
 type ExecutableMetadata struct {
