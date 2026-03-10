@@ -78,9 +78,13 @@ func (t *Tracer) triggerReportEvent(data []byte) {
 	switch event.Type {
 	case support.EventTypeGenericPID:
 		t.handleGenericPID()
-	case support.EventTypeReloadKallsyms:
-		t.kernelSymbolizer.Reload()
-		t.enableEvent(support.EventTypeReloadKallsyms)
+
+		// TODO: This reload mechanism adds some cpu overhead. We should remove it while the PR to fix this issue is pending.
+		// https://github.com/open-telemetry/opentelemetry-ebpf-profiler/pull/1198
+
+		// case support.EventTypeReloadKallsyms:
+		//	 t.kernelSymbolizer.Reload()
+		//	 t.enableEvent(support.EventTypeReloadKallsyms)
 	}
 }
 
