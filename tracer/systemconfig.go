@@ -308,6 +308,12 @@ func loadRodataVars(coll *cebpf.CollectionSpec, kmod *kallsyms.Module, cfg *Conf
 		return fmt.Errorf("failed to set off_cpu_threshold: %v", err)
 	}
 
+	if v := coll.Variables["memory_alloc_threshold"]; v != nil {
+		if err := v.Set(cfg.MemoryAllocThreshold); err != nil {
+			return fmt.Errorf("failed to set memory_alloc_threshold: %v", err)
+		}
+	}
+
 	if err := coll.Variables["filter_error_frames"].Set(cfg.FilterErrorFrames); err != nil {
 		return fmt.Errorf("failed to set drop_error_only_traces: %v", err)
 	}

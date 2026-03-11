@@ -693,6 +693,20 @@ func (pm *ProcessManager) MetaForPID(pid libpf.PID) process.ProcessMeta {
 	return process.ProcessMeta{}
 }
 
+// GetTrackedPIDs returns a slice of all PIDs currently tracked by the process manager.
+// This is used by memory profiling to get a list of processes to potentially attach probes to.
+// NOTE: Exported for tracer memory profiling integration.
+func (pm *ProcessManager) GetTrackedPIDs() []libpf.PID {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	pids := make([]libpf.PID, 0, len(pm.pidToProcessInfo))
+	for pid := range pm.pidToProcessInfo {
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
 // findMappingForTrace locates the mapping for a given host trace.
 func (pm *ProcessManager) findMappingForTrace(pid libpf.PID, fid host.FileID,
 	addr libpf.Address) libpf.FrameMapping {

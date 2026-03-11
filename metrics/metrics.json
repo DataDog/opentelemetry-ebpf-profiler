@@ -2019,5 +2019,96 @@
     "name": "UnwindGoLabelsFailures",
     "field": "bpf.golabels.errors",
     "id": 279
+  },
+  {
+    "description": "Number of memory allocation samples generated",
+    "type": "counter",
+    "name": "MemProfSamplesGenerated",
+    "field": "bpf.memory.samples.generated",
+    "id": 280
+  },
+  {
+    "description": "Number of memory allocation samples dropped due to sampling",
+    "type": "counter",
+    "name": "MemProfSamplesDropped",
+    "field": "bpf.memory.samples.dropped",
+    "id": 281
+  },
+  {
+    "description": "Number of large/medium allocations tracked (>=4KB, 50% sampled for medium, 100% for >=1MB)",
+    "type": "counter",
+    "name": "MemProfLargeAllocsTracked",
+    "field": "bpf.memory.large_allocs_tracked",
+    "id": 282
+  },
+  {
+    "description": "Number of successful memory profiling uprobe attachments",
+    "type": "counter",
+    "name": "MemProfAttachSuccess",
+    "field": "agent.memory.attach_success",
+    "id": 283
+  },
+  {
+    "description": "Number of failed memory profiling uprobe attachments",
+    "type": "counter",
+    "name": "MemProfAttachFailure",
+    "field": "agent.memory.attach_failure",
+    "id": 284
+  },
+  {
+    "description": "Number of processes with unknown allocator",
+    "type": "counter",
+    "name": "MemProfAllocatorUnknown",
+    "field": "agent.memory.allocator_unknown",
+    "id": 285
+  },
+  {
+    "description": "Number of times trace collection failed due to ring buffer full",
+    "type": "counter",
+    "name": "MemProfRingBufferFull",
+    "field": "bpf.memory.ring_buffer_full",
+    "id": 286
+  },
+  {
+    "description": "Number of free operations tracked",
+    "type": "counter",
+    "name": "MemProfFreeTracked",
+    "field": "bpf.memory.free_tracked",
+    "id": 287
+  },
+  {
+    "description": "Number of failures to read allocation metadata from glibc chunk header (free + realloc)",
+    "type": "counter",
+    "name": "MemProfMetadataReadFailed",
+    "field": "bpf.memory.metadata_read_failed",
+    "id": 288
+  },
+  {
+    "description": "Number of invalid allocation sizes detected during free or realloc operations",
+    "type": "counter",
+    "name": "MemProfInvalidSize",
+    "field": "bpf.memory.invalid_size",
+    "id": 289
+  },
+  {
+    "description": "Number of realloc operations",
+    "type": "counter",
+    "name": "MemProfReallocTotal",
+    "field": "bpf.memory.realloc_total",
+    "id": 290
+  },
+  {
+    "description": "Number of realloc operations that moved the allocation",
+    "type": "counter",
+    "name": "MemProfReallocMoved",
+    "field": "bpf.memory.realloc_moved",
+    "id": 291
+  },
+  {
+    "description": "Number of entry/return correlation failures (malloc + realloc)",
+    "type": "counter",
+    "name": "MemProfCorrelationMisses",
+    "field": "bpf.memory.correlation_misses",
+    "id": 292
   }
 ]

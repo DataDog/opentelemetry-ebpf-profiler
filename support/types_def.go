@@ -99,10 +99,11 @@ const (
 )
 
 const (
-	TraceOriginUnknown  = C.TRACE_UNKNOWN
-	TraceOriginSampling = C.TRACE_SAMPLING
-	TraceOriginOffCPU   = C.TRACE_OFF_CPU
-	TraceOriginProbe    = C.TRACE_PROBE
+	TraceOriginUnknown     = C.TRACE_UNKNOWN
+	TraceOriginSampling    = C.TRACE_SAMPLING
+	TraceOriginOffCPU      = C.TRACE_OFF_CPU
+	TraceOriginProbe       = C.TRACE_PROBE
+	TraceOriginMemoryAlloc = C.TRACE_ALLOCATION
 )
 
 type ApmSpanID C.ApmSpanID
@@ -286,4 +287,18 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindDotnetErrBadFP:                       metrics.IDUnwindDotnetErrBadFP,
 	C.metricID_UnwindDotnetErrCodeHeader:                  metrics.IDUnwindDotnetErrCodeHeader,
 	C.metricID_UnwindDotnetErrCodeTooLarge:                metrics.IDUnwindDotnetErrCodeTooLarge,
+	// Memory Profiling Metrics
+	C.metricID_MemProfSamplesGenerated:   metrics.IDMemProfSamplesGenerated,
+	C.metricID_MemProfSamplesDropped:     metrics.IDMemProfSamplesDropped,
+	C.metricID_MemProfLargeAllocsTracked: metrics.IDMemProfLargeAllocsTracked,
+	C.metricID_MemProfAttachSuccess:      metrics.IDMemProfAttachSuccess,
+	C.metricID_MemProfAttachFailure:      metrics.IDMemProfAttachFailure,
+	C.metricID_MemProfAllocatorUnknown:   metrics.IDMemProfAllocatorUnknown,
+	C.metricID_MemProfRingBufferFull:     metrics.IDMemProfRingBufferFull,
+	C.metricID_MemProfFreeTracked:        metrics.IDMemProfFreeTracked,
+	C.metricID_MemProfMetadataReadFailed: metrics.IDMemProfMetadataReadFailed,
+	C.metricID_MemProfInvalidSize:        metrics.IDMemProfInvalidSize,
+	C.metricID_MemProfReallocTotal:       metrics.IDMemProfReallocTotal,
+	C.metricID_MemProfReallocMoved:       metrics.IDMemProfReallocMoved,
+	C.metricID_MemProfCorrelationMisses:  metrics.IDMemProfCorrelationMisses,
 }

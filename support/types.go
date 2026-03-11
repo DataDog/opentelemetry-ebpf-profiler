@@ -57,7 +57,7 @@ const MaxFrameUnwinds = 0x80
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x62
+	MetricIDBeginCumulative = 0x6f
 )
 
 const (
@@ -88,10 +88,11 @@ const (
 )
 
 const (
-	TraceOriginUnknown  = 0x0
-	TraceOriginSampling = 0x1
-	TraceOriginOffCPU   = 0x2
-	TraceOriginProbe    = 0x3
+	TraceOriginUnknown     = 0x0
+	TraceOriginSampling    = 0x1
+	TraceOriginOffCPU      = 0x2
+	TraceOriginProbe       = 0x3
+	TraceOriginMemoryAlloc = 0x4
 )
 
 type ApmSpanID [8]byte
@@ -467,4 +468,18 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5d: metrics.IDUnwindDotnetErrBadFP,
 	0x5e: metrics.IDUnwindDotnetErrCodeHeader,
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
+
+	0x62: metrics.IDMemProfSamplesGenerated,
+	0x63: metrics.IDMemProfSamplesDropped,
+	0x64: metrics.IDMemProfLargeAllocsTracked,
+	0x65: metrics.IDMemProfAttachSuccess,
+	0x66: metrics.IDMemProfAttachFailure,
+	0x67: metrics.IDMemProfAllocatorUnknown,
+	0x68: metrics.IDMemProfRingBufferFull,
+	0x69: metrics.IDMemProfFreeTracked,
+	0x6a: metrics.IDMemProfMetadataReadFailed,
+	0x6b: metrics.IDMemProfInvalidSize,
+	0x6c: metrics.IDMemProfReallocTotal,
+	0x6d: metrics.IDMemProfReallocMoved,
+	0x6e: metrics.IDMemProfCorrelationMisses,
 }

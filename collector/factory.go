@@ -54,10 +54,13 @@ func BuildProfilesReceiver(options ...Option) xreceiver.CreateProfilesFunc {
 		}
 
 		controlerCfg := &controller.Config{
-			Config:             *cfg,
-			ExecutableReporter: controllerOption.executableReporter,
-			ReporterFactory:    controllerOption.reporterFactory,
-			OnShutdown:         controllerOption.onShutdown,
+			Config:                 *cfg,
+			ExecutableReporter:     controllerOption.executableReporter,
+			ReporterFactory:        controllerOption.reporterFactory,
+			OnShutdown:             controllerOption.onShutdown,
+			TracerAccessCallback:   controllerOption.tracerAccessCallback,
+			MemoryProfilingEnabled: controllerOption.memoryProfilingEnabled,
+			MemoryAllocThreshold:   controllerOption.memoryAllocThreshold,
 		}
 
 		return internal.NewController(controlerCfg, rs, nextConsumer)

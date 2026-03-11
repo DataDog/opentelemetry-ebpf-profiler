@@ -117,6 +117,16 @@ struct pt_regs {
   #error "Unsupported architecture"
 #endif
 
+#if defined(__x86_64__)
+  #define PT_REGS_PARM1(x) ((x)->di)
+  #define PT_REGS_PARM2(x) ((x)->si)
+  #define PT_REGS_RC(x)    ((x)->ax)
+#elif defined(__aarch64__)
+  #define PT_REGS_PARM1(x) ((x)->regs[0])
+  #define PT_REGS_PARM2(x) ((x)->regs[1])
+  #define PT_REGS_RC(x)    ((x)->regs[0])
+#endif
+
 struct bpf_perf_event_data {
   struct pt_regs regs;
 };

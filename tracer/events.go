@@ -36,6 +36,12 @@ const (
 	maxEvents = 4096
 )
 
+// SetPIDNewCallback sets a function to be called for each new PID discovered.
+// Must be called before StartPIDEventProcessor.
+func (t *Tracer) SetPIDNewCallback(fn func(int)) {
+	t.pidNewCallback = fn
+}
+
 // StartPIDEventProcessor spawns a goroutine to process PID events.
 func (t *Tracer) StartPIDEventProcessor(ctx context.Context) {
 	go t.processPIDEvents(ctx)
@@ -49,6 +55,9 @@ func (t *Tracer) processPIDEvents(ctx context.Context) {
 		select {
 		case pidTid := <-t.pidEvents:
 			t.processManager.SynchronizeProcess(process.New(pidTid.PID(), pidTid.TID()))
+			if t.pidNewCallback != nil {
+				t.pidNewCallback(int(pidTid.PID()))
+			}
 		case <-pidCleanupTicker.C:
 			t.processManager.CleanupPIDs()
 		case <-ctx.Done():

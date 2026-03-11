@@ -96,6 +96,7 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 			support.TraceOriginSampling,
 			support.TraceOriginOffCPU,
 			support.TraceOriginProbe,
+			support.TraceOriginMemoryAlloc,
 		} {
 			if len(originToEvents[origin]) == 0 {
 				// Do not append empty profiles.
@@ -164,6 +165,10 @@ func (p *Pdata) setProfile(
 	case support.TraceOriginProbe:
 		st.SetTypeStrindex(stringSet.Add("events"))
 		st.SetUnitStrindex(stringSet.Add("count"))
+	case support.TraceOriginMemoryAlloc:
+		st.SetTypeStrindex(stringSet.Add("alloc_space"))
+		st.SetUnitStrindex(stringSet.Add("bytes"))
+		attrMgr.AppendOptionalString(profile.AttributeIndices(), "profile.type", "memory")
 	default:
 		// Should never happen
 		return fmt.Errorf("generating profile for unsupported origin %d", origin)
@@ -173,7 +178,7 @@ func (p *Pdata) setProfile(
 		sample := profile.Samples().AppendEmpty()
 
 		sample.TimestampsUnixNano().FromRaw(traceInfo.Timestamps)
-		if origin == support.TraceOriginOffCPU {
+		if origin == support.TraceOriginOffCPU || origin == support.TraceOriginMemoryAlloc {
 			sample.Values().Append(traceInfo.OffTimes...)
 		}
 

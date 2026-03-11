@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/consumer/xconsumer"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
 
 func TestWithExecutableReporter(t *testing.T) {
@@ -41,4 +42,13 @@ func TestWithReporterFactory(t *testing.T) {
 		t,
 		reflect.ValueOf(reporterFactory).Pointer(),
 		reflect.ValueOf(option.apply(&controllerOption{}).reporterFactory).Pointer())
+}
+
+func TestWithTracerAccess(t *testing.T) {
+	callback := func(*tracer.Tracer) {}
+	option := WithTracerAccess(callback)
+	require.Equal(
+		t,
+		reflect.ValueOf(callback).Pointer(),
+		reflect.ValueOf(option.apply(&controllerOption{}).tracerAccessCallback).Pointer())
 }

@@ -91,12 +91,19 @@ func (c *Controller) Start(ctx context.Context) error {
 		ProbeLinks:             c.config.ProbeLinks,
 		LoadProbe:              c.config.LoadProbe,
 		ExecutableReporter:     c.config.ExecutableReporter,
+		MemoryProfilingEnabled: c.config.MemoryProfilingEnabled,
+		MemoryAllocThreshold:   c.config.MemoryAllocThreshold,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load eBPF tracer: %w", err)
 	}
 	c.tracer = trc
 	log.Info("eBPF tracer loaded")
+
+	// Invoke tracer access callback if provided
+	if c.config.TracerAccessCallback != nil {
+		c.config.TracerAccessCallback(trc)
+	}
 
 	now := time.Now()
 
@@ -116,6 +123,10 @@ func (c *Controller) Start(ctx context.Context) error {
 			return fmt.Errorf("failed to start off-cpu profiling: %v", err)
 		}
 		log.Infof("Enabled off-cpu profiling with p=%f", c.config.OffCPUThreshold)
+	}
+
+	if c.config.MemoryProfilingEnabled {
+		log.Infof("Memory profiling enabled with %d%% small-alloc sampling", c.config.MemoryAllocThreshold)
 	}
 
 	if len(c.config.ProbeLinks) > 0 {
@@ -185,3 +196,4 @@ func startTraceHandling(ctx context.Context, trc *tracer.Tracer) error {
 
 	return nil
 }
+

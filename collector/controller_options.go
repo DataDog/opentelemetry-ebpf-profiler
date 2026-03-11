@@ -6,6 +6,7 @@ package collector // import "go.opentelemetry.io/ebpf-profiler/collector"
 import (
 	"go.opentelemetry.io/collector/consumer/xconsumer"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
 
 type Option interface {
@@ -13,9 +14,12 @@ type Option interface {
 }
 
 type controllerOption struct {
-	executableReporter reporter.ExecutableReporter
-	reporterFactory    func(cfg *reporter.Config, nextConsumer xconsumer.Profiles) (reporter.Reporter, error)
-	onShutdown         func() error
+	executableReporter    reporter.ExecutableReporter
+	reporterFactory       func(cfg *reporter.Config, nextConsumer xconsumer.Profiles) (reporter.Reporter, error)
+	onShutdown            func() error
+	tracerAccessCallback  func(*tracer.Tracer)
+	memoryProfilingEnabled bool
+	memoryAllocThreshold  uint32
 }
 
 type optFunc func(*controllerOption) *controllerOption
@@ -43,6 +47,34 @@ func WithOnShutdown(onShutdown func() error) Option {
 func WithReporterFactory(reporterFactory func(cfg *reporter.Config, nextConsumer xconsumer.Profiles) (reporter.Reporter, error)) Option {
 	return optFunc(func(option *controllerOption) *controllerOption {
 		option.reporterFactory = reporterFactory
+		return option
+	})
+}
+
+// WithTracerAccess registers a callback invoked after the tracer is initialized, before profiling starts.
+func WithTracerAccess(callback func(*tracer.Tracer)) Option {
+	return optFunc(func(option *controllerOption) *controllerOption {
+		option.tracerAccessCallback = callback
+		return option
+	})
+}
+
+// WithMemoryProfiling configures memory allocation profiling for the collector.
+// When enabled, the collector will track memory allocations using eBPF probes.
+//
+// Parameters:
+//   - enabled: Whether to enable memory profiling
+//   - allocThreshold: Sampling rate for memory allocations (0-100, where 0 means all allocations)
+//
+// Example:
+//
+//	collector.BuildProfilesReceiver(
+//	    collector.WithMemoryProfiling(true, 10),
+//	)
+func WithMemoryProfiling(enabled bool, allocThreshold uint32) Option {
+	return optFunc(func(option *controllerOption) *controllerOption {
+		option.memoryProfilingEnabled = enabled
+		option.memoryAllocThreshold = allocThreshold
 		return option
 	})
 }

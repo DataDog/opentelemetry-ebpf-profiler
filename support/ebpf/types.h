@@ -307,6 +307,47 @@ enum {
   // number of failures to read Go custom labels
   metricID_UnwindGoLabelsFailures,
 
+  // Memory Profiling Metrics
+
+  // number of memory allocation samples generated
+  metricID_MemProfSamplesGenerated,
+
+  // number of memory allocation samples dropped
+  metricID_MemProfSamplesDropped,
+
+  // number of large/medium allocations tracked (>=4KB, 50% sampled for medium, 100% for >=1MB)
+  metricID_MemProfLargeAllocsTracked,
+
+  // number of successful uprobe attachments for memory profiling
+  metricID_MemProfAttachSuccess,
+
+  // number of failed uprobe attachments for memory profiling
+  metricID_MemProfAttachFailure,
+
+  // number of processes with unknown/unsupported allocators
+  metricID_MemProfAllocatorUnknown,
+
+  // number of times ring buffer was full when sending allocation trace
+  metricID_MemProfRingBufferFull,
+
+  // number of free operations tracked
+  metricID_MemProfFreeTracked,
+
+  // number of failures to read allocation metadata from glibc chunk header (free + realloc)
+  metricID_MemProfMetadataReadFailed,
+
+  // number of invalid allocation sizes detected during free or realloc operations
+  metricID_MemProfInvalidSize,
+
+  // number of realloc operations
+  metricID_MemProfReallocTotal,
+
+  // number of realloc operations that moved the allocation
+  metricID_MemProfReallocMoved,
+
+  // number of entry/return correlation failures (malloc + realloc)
+  metricID_MemProfCorrelationMisses,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
@@ -346,6 +387,7 @@ typedef enum TraceOrigin {
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
   TRACE_PROBE,
+  TRACE_ALLOCATION,  // Memory allocation tracking
 } TraceOrigin;
 
 // MAX_FRAME_UNWINDS defines the maximum number of frames per
@@ -603,8 +645,10 @@ typedef struct Trace {
   // origin indicates the source of the trace.
   TraceOrigin origin;
 
-  // offtime stores the nanoseconds that the trace was off-cpu for.
-  u64 offtime;
+  union {
+    u64 offtime;       // TRACE_OFF_CPU: nanoseconds the trace was off-CPU
+    u64 alloc_size;    // TRACE_ALLOCATION: size of memory allocation in bytes
+  };
 
   // The frames of the stack trace.
   Frame frames[MAX_FRAME_UNWINDS];

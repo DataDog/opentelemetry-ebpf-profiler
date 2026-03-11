@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
+	"go.opentelemetry.io/ebpf-profiler/processmanager/allocator"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/rlimit"
@@ -117,6 +118,9 @@ type Tracer struct {
 
 	// filterIdleFrames indicates whether idle frames should be filtered.
 	filterIdleFrames bool
+
+	// pidNewCallback, if set, is called for each new PID discovered.
+	pidNewCallback func(int)
 }
 
 type Config struct {
@@ -158,6 +162,10 @@ type Config struct {
 	// LoadProbe indicates whether the generic eBPF program should be loaded
 	// without being attached to something.
 	LoadProbe bool
+	// MemoryProfilingEnabled enables memory allocation profiling infrastructure.
+	MemoryProfilingEnabled bool
+	// MemoryAllocThreshold is the sampling rate for memory allocations (0-100).
+	MemoryAllocThreshold uint32
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -403,7 +411,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		return nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe {
+	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe || cfg.MemoryProfilingEnabled {
 		// Load the tail call destinations if any kind of event profiling is enabled.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
@@ -441,6 +449,19 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], probeProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
 			return nil, nil, fmt.Errorf("failed to load uprobe eBPF programs: %v", err)
+		}
+	}
+
+	if cfg.MemoryProfilingEnabled {
+		memProgs := []progLoaderHelper{
+			{name: "uretprobe__malloc_return", noTailCallTarget: true, enable: true},
+			{name: "uprobe__free_entry", noTailCallTarget: true, enable: true},
+			{name: "uprobe__realloc_entry", noTailCallTarget: true, enable: true},
+			{name: "uretprobe__realloc_return", noTailCallTarget: true, enable: true},
+		}
+		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], memProgs,
+			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
+			return nil, nil, fmt.Errorf("failed to load memory profiling eBPF programs: %v", err)
 		}
 	}
 
@@ -943,6 +964,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 	case support.TraceOriginSampling:
 	case support.TraceOriginOffCPU:
 	case support.TraceOriginProbe:
+	case support.TraceOriginMemoryAlloc:
 	default:
 		log.Warnf("Skip handling trace from unexpected %d origin", trace.Origin)
 		return nil
@@ -1205,4 +1227,139 @@ func (t *Tracer) AttachProbes(probes []string) error {
 
 func (t *Tracer) HandleTrace(bpfTrace *host.Trace) {
 	t.processManager.HandleTrace(bpfTrace)
+}
+
+// GetTrackedPIDs returns a list of all PIDs currently being tracked by the process manager.
+// This is used by memory profiling to determine which processes are available for profiling.
+func (t *Tracer) GetTrackedPIDs() []int {
+	pids := t.processManager.GetTrackedPIDs()
+	result := make([]int, len(pids))
+	for i, pid := range pids {
+		result[i] = int(pid)
+	}
+	return result
+}
+
+// AttachMemoryProfilingForPID attaches memory profiling uprobes to a specific process.
+// This is the primary API for dynamic attachment - the caller (receiver/controller)
+// is responsible for deciding which PIDs to profile.
+//
+// Returns error if:
+// - Allocator discovery fails
+// - Allocator is not supported (POC: glibc only)
+// - Probe attachment fails
+func (t *Tracer) AttachMemoryProfilingForPID(pid int) error {
+	// Discover allocator
+	allocInfo, err := allocator.DiscoverAllocator(pid)
+	if err != nil {
+		return fmt.Errorf("allocator discovery failed: %w", err)
+	}
+
+	// POC only supports glibc
+	if allocInfo.Type != allocator.AllocatorGlibc {
+		return fmt.Errorf("unsupported allocator: %s (POC supports glibc only)", allocInfo.Type)
+	}
+
+	return t.attachMemoryProbes(pid, allocInfo)
+}
+
+// attachMemoryProbes attaches uprobes to malloc/free/realloc for a specific process.
+// This attaches 4 probes total: malloc return, free entry, realloc entry+return.
+// IMPORTANT: Uprobes are system-wide, so we only attach them ONCE (for the first PID).
+// Subsequent PIDs are just added to the memory_profiling_pids map for filtering.
+// NOTE: malloc only needs return probe since we read size from glibc metadata.
+func (t *Tracer) attachMemoryProbes(pid int, allocInfo *allocator.AllocatorInfo) error {
+	// Add PID to the memory_profiling_pids map so eBPF filters for this PID
+	pidsMap, ok := t.ebpfMaps["memory_profiling_pids"]
+	if !ok {
+		return errors.New("memory_profiling_pids map not found")
+	}
+
+	pidKey := uint32(pid)
+	pidValue := uint8(1)
+	if err := pidsMap.Put(&pidKey, &pidValue); err != nil {
+		return fmt.Errorf("failed to add PID %d to profiling map: %w", pid, err)
+	}
+	log.Debugf("Added PID %d to memory profiling filter", pid)
+
+	// Build probe specifications for 4 uprobes (malloc simplified to return-only)
+	// Use a PID-independent hook name so we only attach once
+	probes := []struct {
+		funcName  string
+		probeType ProbeType
+		hookName  string
+		progName  string
+	}{
+		{"malloc", ProbeTypeUretprobe, "uretprobe/malloc", "uretprobe__malloc_return"},
+		{"free", ProbeTypeUprobe, "uprobe/free", "uprobe__free_entry"},
+		{"realloc", ProbeTypeUprobe, "uprobe/realloc", "uprobe__realloc_entry"},
+		{"realloc", ProbeTypeUretprobe, "uretprobe/realloc", "uretprobe__realloc_return"},
+	}
+
+	// Track successfully attached probes for cleanup on error
+	attachedHooks := make([]hookPoint, 0, len(probes))
+
+	for _, p := range probes {
+		hook := hookPoint{group: p.probeType.String(), name: p.hookName}
+
+		// Check if this probe is already attached (for subsequent PIDs)
+		if _, exists := t.hooks[hook]; exists {
+			log.Debugf("Probe %s already attached, skipping", p.hookName)
+			continue
+		}
+
+		// Get the actual symbol name from allocInfo (handles versioned symbols)
+		symbol, ok := allocInfo.Symbols[p.funcName]
+		if !ok {
+			// Cleanup already attached probes
+			for _, hook := range attachedHooks {
+				if link := t.hooks[hook]; link != nil {
+					link.Close()
+					delete(t.hooks, hook)
+				}
+			}
+			return fmt.Errorf("symbol %s not found in allocator info", p.funcName)
+		}
+
+		// Get the specific eBPF program for this probe
+		ebpfProg, ok := t.ebpfProgs[p.progName]
+		if !ok {
+			// Cleanup already attached probes
+			for _, hook := range attachedHooks {
+				if link := t.hooks[hook]; link != nil {
+					link.Close()
+					delete(t.hooks, hook)
+				}
+			}
+			return fmt.Errorf("eBPF program %s not found", p.progName)
+		}
+
+		// Create probe spec
+		spec := &ProbeSpec{
+			Type:     p.probeType,
+			Target:   allocInfo.LibraryPath,
+			Symbol:   symbol,
+			ProgName: p.progName,
+		}
+
+		// Attach the probe (only once, for the first PID)
+		log.Debugf("Attaching probe %s to %s in %s", p.hookName, symbol, allocInfo.LibraryPath)
+		probeLink, err := AttachProbe(ebpfProg, spec)
+		if err != nil {
+			// Cleanup already attached probes
+			for _, hook := range attachedHooks {
+				if link := t.hooks[hook]; link != nil {
+					link.Close()
+					delete(t.hooks, hook)
+				}
+			}
+			return fmt.Errorf("failed to attach %s to %s: %w", p.probeType, p.funcName, err)
+		}
+
+		// Store the link in hooks map
+		t.hooks[hook] = probeLink
+		attachedHooks = append(attachedHooks, hook)
+	}
+
+	return nil
 }

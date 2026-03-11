@@ -635,6 +635,45 @@ const (
 	// Number of failures reading Go custom labels
 	IDUnwindGoLabelsFailures = 279
 
+	// Number of memory allocation samples generated
+	IDMemProfSamplesGenerated = 280
+
+	// Number of memory allocation samples dropped due to sampling
+	IDMemProfSamplesDropped = 281
+
+	// Number of large/medium allocations tracked (>=4KB, 50% sampled for medium, 100% for >=1MB)
+	IDMemProfLargeAllocsTracked = 282
+
+	// Number of successful memory profiling uprobe attachments
+	IDMemProfAttachSuccess = 283
+
+	// Number of failed memory profiling uprobe attachments
+	IDMemProfAttachFailure = 284
+
+	// Number of processes with unknown allocator
+	IDMemProfAllocatorUnknown = 285
+
+	// Number of times trace collection failed due to ring buffer full
+	IDMemProfRingBufferFull = 286
+
+	// Number of free operations tracked
+	IDMemProfFreeTracked = 287
+
+	// Number of failures to read allocation metadata from glibc chunk header (free + realloc)
+	IDMemProfMetadataReadFailed = 288
+
+	// Number of invalid allocation sizes detected during free or realloc operations
+	IDMemProfInvalidSize = 289
+
+	// Number of realloc operations
+	IDMemProfReallocTotal = 290
+
+	// Number of realloc operations that moved the allocation
+	IDMemProfReallocMoved = 291
+
+	// Number of entry/return correlation failures (malloc + realloc)
+	IDMemProfCorrelationMisses = 292
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 280
+	IDMax = 293
 )

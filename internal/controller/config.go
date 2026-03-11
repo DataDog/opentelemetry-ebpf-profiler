@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/collector/consumer/xconsumer"
 	"go.opentelemetry.io/ebpf-profiler/collector/config"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
 
 type Config struct {
@@ -27,7 +28,14 @@ type Config struct {
 	ReporterFactory func(cfg *reporter.Config, nextConsumer xconsumer.Profiles) (reporter.Reporter, error)
 	Reporter        reporter.Reporter
 
+	// TracerAccessCallback is invoked after the tracer is initialized, providing access to the tracer instance
+	TracerAccessCallback func(*tracer.Tracer)
+
 	Fs *flag.FlagSet
+
+	// Memory profiling configuration
+	MemoryProfilingEnabled bool   // Enable memory allocation profiling infrastructure
+	MemoryAllocThreshold   uint32 // Small allocation sampling percentage (0-100)
 }
 
 // Dump visits all flag sets, and dumps them all to debug

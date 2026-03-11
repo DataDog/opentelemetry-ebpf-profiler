@@ -725,7 +725,7 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 #endif // TESTING_COREDUMP
 
 static inline EBPF_INLINE int collect_trace(
-  struct pt_regs *ctx, TraceOrigin origin, u32 pid, u32 tid, u64 trace_timestamp, u64 off_cpu_time)
+  struct pt_regs *ctx, TraceOrigin origin, u32 pid, u32 tid, u64 trace_timestamp, u64 value)
 {
   // The trace is reused on each call to this function so we have to reset the
   // variables used to maintain state.
@@ -740,7 +740,8 @@ static inline EBPF_INLINE int collect_trace(
   trace->pid     = pid;
   trace->tid     = tid;
   trace->ktime   = trace_timestamp;
-  trace->offtime = off_cpu_time;
+  // Store value in union - interpretation depends on trace origin
+  trace->offtime = value;  // Works for all union members (same underlying storage)
   if (bpf_get_current_comm(&(trace->comm), sizeof(trace->comm)) < 0) {
     increment_metric(metricID_ErrBPFCurrentComm);
   }
