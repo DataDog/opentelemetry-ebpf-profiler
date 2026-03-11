@@ -454,7 +454,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 
 	if cfg.MemoryProfilingEnabled {
 		memProgs := []progLoaderHelper{
-			{name: "uretprobe__malloc_return", noTailCallTarget: true, enable: true},
+			{name: "uprobe__malloc_entry", noTailCallTarget: true, enable: true},
 			{name: "uprobe__free_entry", noTailCallTarget: true, enable: true},
 			{name: "uprobe__realloc_entry", noTailCallTarget: true, enable: true},
 			{name: "uretprobe__realloc_return", noTailCallTarget: true, enable: true},
@@ -1282,7 +1282,7 @@ func (t *Tracer) attachMemoryProbes(pid int, allocInfo *allocator.AllocatorInfo)
 	}
 	log.Debugf("Added PID %d to memory profiling filter", pid)
 
-	// Build probe specifications for 4 uprobes (malloc simplified to return-only)
+	// Build probe specifications for 4 uprobes
 	// Use a PID-independent hook name so we only attach once
 	probes := []struct {
 		funcName  string
@@ -1290,7 +1290,7 @@ func (t *Tracer) attachMemoryProbes(pid int, allocInfo *allocator.AllocatorInfo)
 		hookName  string
 		progName  string
 	}{
-		{"malloc", ProbeTypeUretprobe, "uretprobe/malloc", "uretprobe__malloc_return"},
+		{"malloc", ProbeTypeUprobe, "uprobe/malloc", "uprobe__malloc_entry"},
 		{"free", ProbeTypeUprobe, "uprobe/free", "uprobe__free_entry"},
 		{"realloc", ProbeTypeUprobe, "uprobe/realloc", "uprobe__realloc_entry"},
 		{"realloc", ProbeTypeUretprobe, "uretprobe/realloc", "uretprobe__realloc_return"},

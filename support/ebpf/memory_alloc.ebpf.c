@@ -81,7 +81,7 @@ static inline EBPF_INLINE bool should_sample_allocation(u64 size) {
 }
 
 // Read allocation size from glibc chunk header at ptr-8.
-// Used by malloc return, free, and realloc to get allocation sizes.
+// Used by free and realloc to get the size of an existing allocation.
 // The size field has 3 flag bits in the low bits; mask them off.
 static inline EBPF_INLINE u64 read_glibc_alloc_size(u64 ptr) {
   if (ptr == 0 || (ptr & 0xF) != 0) {
@@ -104,21 +104,15 @@ static inline EBPF_INLINE u64 read_glibc_alloc_size(u64 ptr) {
   return size;
 }
 
-// malloc return: read allocation size from glibc chunk header at ret_ptr-8.
-SEC("kprobe/uretprobe__malloc_return")
-int uretprobe__malloc_return(struct pt_regs *ctx) {
+// malloc entry: read requested size from rdi (no memory read needed).
+SEC("kprobe/uprobe__malloc_entry")
+int uprobe__malloc_entry(struct pt_regs *ctx) {
   if (!is_pid_tracked()) {
     return 0;
   }
 
-  u64 ret_ptr = (u64)PT_REGS_RC(ctx);
-  if (ret_ptr == 0) {
-    return 0;
-  }
-
-  u64 size = read_glibc_alloc_size(ret_ptr);
+  u64 size = (u64)PT_REGS_PARM1(ctx);
   if (size == 0) {
-    increment_metric(metricID_MemProfCorrelationMisses);
     return 0;
   }
 
