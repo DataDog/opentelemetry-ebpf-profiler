@@ -1,6 +1,6 @@
 .PHONY: all all-common clean ebpf generate test test-deps \
 	test-junit protobuf docker-image agent legal integration-test-binaries \
-	codespell lint ebpf-profiler format format-ebpf format-go pprof-execs \
+	codespell lint ebpf-profiler format format-ebpf format-go pprof-execs threadctx-execs \
 	pprof_1_23 pprof_1_24 pprof_1_24_cgo \
 	rust-components rust-targets rust-tests vanity-import-check vanity-import-fix
 
@@ -121,7 +121,10 @@ test-deps:
 		($(MAKE) -C "$(testdata_dir)") || exit ; \
 	)
 
-TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support interpreter/golabels/integrationtests
+TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support interpreter/golabels/integrationtests interpreter/threadcontext/integrationtests
+
+threadctx-execs:
+	$(MAKE) -C interpreter/threadcontext/integrationtests/testdata
 
 pprof-execs: pprof_1_23 pprof_1_24 pprof_1_24_cgo pprof_1_24_cgo_pie pprof_stable pprof_stable_cgo pprof_stable_cgo_pie
 
@@ -146,7 +149,7 @@ pprof_stable_cgo:
 pprof_stable_cgo_pie:
 	CGO_ENABLED=1 go test -C ./interpreter/golabels/integrationtests/pprof -c -ldflags '-extldflags "-static"' -trimpath -buildmode=pie -tags $(GO_TAGS),withcgo,integration -o ./../$@
 
-integration-test-binaries: generate ebpf pprof-execs
+integration-test-binaries: generate ebpf pprof-execs threadctx-execs
 	$(foreach test_name, $(TEST_INTEGRATION_BINARY_DIRS), \
 		(go test -ldflags='-extldflags=-static' -trimpath -c \
 			-tags $(GO_TAGS),static_build,integration \
