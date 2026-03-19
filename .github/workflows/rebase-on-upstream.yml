@@ -67,6 +67,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Tag old datadog HEAD
+        run: |
+          old_sha=$(git rev-parse origin/datadog)
+          if git tag --points-at "$old_sha" | grep -q .; then
+            echo "Tag already exists for $old_sha, skipping"
+          else
+            tag_name="refs-${old_sha:0:12}"
+            git tag -a "$tag_name" "$old_sha" -m "Preserve old datadog HEAD before rebase"
+            git push origin "$tag_name"
+          fi
+
       - name: Rewrite datadog branch
         run: |
           git checkout datadog
