@@ -15,7 +15,7 @@ jobs:
     permissions:
       security-events: write # for github/codeql-action/analyze to upload SARIF results
     name: Analyze Go
-    if: ${{ github.actor != 'dependabot[bot]' && github.repository == 'open-telemetry/opentelemetry-ebpf-profiler' }}
+    if: ${{ github.actor != 'dependabot[bot]' && github.repository == 'DataDog/opentelemetry-ebpf-profiler' }}
     runs-on: ubuntu-24.04  # CodeQL CLI only supports x86_64 Linux
     steps:
       - name: Checkout repository
