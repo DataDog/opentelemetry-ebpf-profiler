@@ -346,6 +346,9 @@ enum {
   // number of successful reads of thread context info
   metricID_UnwindThreadContextReadSuccesses,
 
+  // number of prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME) calls with "OTEL_CTX" name
+  metricID_NumPrctlSetVmaOtelCtx,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //

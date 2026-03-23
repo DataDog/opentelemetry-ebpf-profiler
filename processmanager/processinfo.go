@@ -456,9 +456,8 @@ func (pm *ProcessManager) synchronizeMappings(pr process.Process,
 			if processcontext.IsContextMapping(m.Path.String()) {
 				processContextInfo = readProcessContext(m, pr, oldProcessContextInfo)
 				// Even if process context is not found, it might be published in the future.
-				// For now, we rely on a new call to synchronizeMappings to pick it up.
-				// TODO: Add some kind of polling mechanism or a hook on prctl to be notified
-				// when the process context is published.
+				// The eBPF hook on prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME) will trigger a
+				// PID resynchronization when the process names its context mapping OTEL_CTX.
 			}
 			continue
 		}

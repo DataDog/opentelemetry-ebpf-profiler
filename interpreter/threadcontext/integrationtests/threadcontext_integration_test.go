@@ -91,6 +91,7 @@ func Test_ThreadContext(t *testing.T) {
 			t.Log("Attached tracer program")
 			require.NoError(t, trc.EnableProfiling())
 			require.NoError(t, trc.AttachSchedMonitor())
+			require.NoError(t, trc.AttachPrctlMonitor())
 
 			traceCh := make(chan *libpf.EbpfTrace)
 			require.NoError(t, trc.StartMapMonitors(ctx, traceCh))
@@ -131,15 +132,17 @@ func Test_ThreadContext(t *testing.T) {
 						continue
 					}
 					if len(trace.CustomLabels) > 0 {
-						traceID := trace.CustomLabels[libpf.Intern("trace id")]
-						spanID := trace.CustomLabels[libpf.Intern("span id")]
-						traceIDStr := traceID.String()
-						spanIDStr := spanID.String()
+						traceID := trace.CustomLabels[libpf.Intern("trace id")].String()
+						spanID := trace.CustomLabels[libpf.Intern("span id")].String()
+						serviceName := trace.CustomLabels[libpf.Intern("service.name")].String()
 
-						if traceIDStr != "" && spanIDStr != "" {
-							t.Logf("Got trace_id=%s span_id=%s", traceIDStr, spanIDStr)
-							require.Equal(t, expectedTraceID, traceIDStr)
-							require.Equal(t, expectedSpanID, spanIDStr)
+						if traceID != "" && spanID != "" && serviceName != "" {
+							t.Logf("Got trace_id=%s span_id=%s service_name=%s", traceID, spanID, serviceName)
+							require.Equal(t, expectedTraceID, traceID)
+							require.Equal(t, expectedSpanID, spanID)
+							require.Equal(t, "some_endpoint", trace.CustomLabels[libpf.Intern("http_route")].String())
+							require.Equal(t, "GET", trace.CustomLabels[libpf.Intern("http_method")].String())
+							require.Equal(t, "some_user_id", trace.CustomLabels[libpf.Intern("user_id")].String())
 							ok = true
 							break Loop
 						}

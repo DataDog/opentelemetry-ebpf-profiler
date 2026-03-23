@@ -61,7 +61,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x6f
+	MetricIDBeginCumulative = 0x70
 )
 
 const (
@@ -507,4 +507,5 @@ var MetricsTranslation = []metrics.MetricID{
 	0x65: metrics.IDUnwindRubyErrReadSvar,
 	0x66: metrics.IDUnwindRubyErrReadRbasicFlags,
 	0x67: metrics.IDUnwindRubyErrCmeMaxEp,
+	0x6f: metrics.IDNumPrctlSetVmaOtelCtx,
 }

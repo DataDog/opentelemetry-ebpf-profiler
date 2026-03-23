@@ -33,17 +33,17 @@ all: $(BINARIES)
 clean:
 	rm -f $(BINARIES)
 
-threadctx_exe_glibc: threadctx.c threadctx_lib.c threadctx_lib.h
-	$(GCC) -mtls-dialect=$(TLS_DIALECT) -o $@ $< threadctx_lib.c
+threadctx_exe_glibc: threadctx.c threadctx_lib.c threadctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(GCC) -mtls-dialect=$(TLS_DIALECT) -o $@ $< threadctx_lib.c otel_process_ctx.c 
 
-threadctx_exe_musl: threadctx.c threadctx_lib.c threadctx_lib.h
-	$(MUSL_GCC) -mtls-dialect=$(TLS_DIALECT) -o $@ $< threadctx_lib.c -static
+threadctx_exe_musl: threadctx.c threadctx_lib.c threadctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(MUSL_GCC) -mtls-dialect=$(TLS_DIALECT) -o $@ $< threadctx_lib.c otel_process_ctx.c -static
 
-libthreadctx_glibc.so: threadctx_lib.c threadctx_lib.h
-	$(GCC) -shared -fPIC -mtls-dialect=$(TLS_DIALECT) -o $@ $<
+libthreadctx_glibc.so: threadctx_lib.c threadctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(GCC) -shared -fPIC -mtls-dialect=$(TLS_DIALECT) -o $@ $< otel_process_ctx.c
 
-libthreadctx_musl.so: threadctx_lib.c threadctx_lib.h
-	$(MUSL_GCC) -shared -fPIC -mtls-dialect=$(TLS_DIALECT) -o $@ $<
+libthreadctx_musl.so: threadctx_lib.c threadctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(MUSL_GCC) -shared -fPIC -mtls-dialect=$(TLS_DIALECT) -o $@ $< otel_process_ctx.c
 
 threadctx_lib_glibc: threadctx.c threadctx_lib.h libthreadctx_glibc.so
 	$(GCC) -o $@ $< -L. -lthreadctx_glibc -Wl,-rpath='$$ORIGIN'

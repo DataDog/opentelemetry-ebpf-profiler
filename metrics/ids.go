@@ -647,6 +647,9 @@ const (
 	// Number of failed attempts to read a CME by exceeding max EP checks
 	IDUnwindRubyErrCmeMaxEp = 285
 
+	// Number of prctl(PR_SET_VMA) calls naming an anonymous mapping OTEL_CTX
+	IDNumPrctlSetVmaOtelCtx = 286
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 286
+	IDMax = 287
 )

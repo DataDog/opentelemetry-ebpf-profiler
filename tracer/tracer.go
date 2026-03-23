@@ -708,13 +708,18 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 		LogLevel: cebpf.LogLevel(bpfVerifierLogLevel),
 	}
 
-	progs := make([]progLoaderHelper, len(tailCallProgs)+2)
+	progs := make([]progLoaderHelper, len(tailCallProgs)+3)
 	copy(progs, tailCallProgs)
 
 	schedProcessFree := schedProcessFreeHookName(libpf.MapKeysToSet(coll.Programs))
 	progs = append(progs,
 		progLoaderHelper{
 			name:             schedProcessFree,
+			noTailCallTarget: true,
+			enable:           true,
+		},
+		progLoaderHelper{
+			name:             "tracepoint__sys_enter_prctl",
 			noTailCallTarget: true,
 			enable:           true,
 		},
@@ -1121,6 +1126,15 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) (*libpf.EbpfTrace, error) {
 
 		if ptr.Apm_trace_id != libpf.InvalidAPMTraceID {
 			trace.CustomLabels[libpf.Intern("trace id")] = libpf.Intern(hex.EncodeToString(ptr.Apm_trace_id[:]))
+		}
+	}
+
+	if procMeta.ProcessContextInfo.Resource != nil {
+		if trace.CustomLabels == nil {
+			trace.CustomLabels = make(map[libpf.String]libpf.String)
+		}
+		for _, attr := range procMeta.ProcessContextInfo.Resource.Attributes {
+			trace.CustomLabels[libpf.Intern(attr.Key)] = libpf.Intern(attr.Value.String())
 		}
 	}
 
