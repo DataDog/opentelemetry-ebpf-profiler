@@ -11,7 +11,7 @@ replace go.opentelemetry.io/ebpf-profiler => ../../
 
 require (
 	github.com/cilium/ebpf v0.21.0
-	go.opentelemetry.io/ebpf-profiler v0.0.202613
+	go.opentelemetry.io/ebpf-profiler v0.0.202614
 )
 
 require (
