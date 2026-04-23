@@ -2,6 +2,8 @@ module github.com/open-telemetry/opentelemetry-ebpf-profiler/tools/strobelight-c
 
 go 1.25.0
 
+toolchain go1.26.2
+
 tool (
 	golang.org/x/vuln/cmd/govulncheck
 	honnef.co/go/tools/cmd/staticcheck
