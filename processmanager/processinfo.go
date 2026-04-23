@@ -142,7 +142,7 @@ func (pm *ProcessManager) getPidInformation(pid libpf.PID, pr process.Process,
 // fillSelfContainerID sets the container ID on meta if the process has the same cgroup
 // directory root as the profiler and the standard cgroup-based detection returned no result.
 func (pm *ProcessManager) fillSelfContainerID(pid libpf.PID, meta *process.ProcessMeta) {
-	if meta.ContainerID != libpf.NullString || pm.selfCgroupIno == 0 {
+	if meta.ContainerID != libpf.NullString || pm.selfContainerID == libpf.NullString {
 		return
 	}
 	var st unix.Stat_t
