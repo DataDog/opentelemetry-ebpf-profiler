@@ -10,6 +10,15 @@ jobs:
       pull-requests: write
       contents: write # need this permission to delete update branch
     steps:
+      - name: Guard against running from an unexpected branch
+        run: |
+          # Only allow this workflow to run from the dedicated rebase branch
+          # so a manual dispatch cannot force-push `datadog` from an unrelated branch.
+          if [[ "${{ github.ref_name }}" != "rebase-on-upstream" ]]; then
+            echo "This workflow can only be dispatched from the 'rebase-on-upstream' branch (got '${{ github.ref_name }}')"
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -44,8 +53,8 @@ jobs:
             exit 1
           fi
 
-          # Check that PR is mergeable
-          if [[ "$(jq '.[0] | .mergeable' pr.json)" == "false" ]]; then
+          # Check that PR is mergeable (gh returns the enum MERGEABLE/CONFLICTING/UNKNOWN)
+          if [[ "$(jq -r '.[0] | .mergeable' pr.json)" != "MERGEABLE" ]]; then
             echo "PR is not mergeable"
             exit 1
           fi
