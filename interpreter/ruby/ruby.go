@@ -101,10 +101,13 @@ const (
 // inline without transitioning back to the native unwinder. This saves tail
 // calls (each cfunc round-trip costs 2-3 tail calls out of a budget of 29)
 // at the cost of losing native frames within cfuncs.
-// Opt-in via OTEL_EBPF_RUBY_SKIP_NATIVE_RESUME=true (default: false).
+// Default: true. Opt-out via OTEL_EBPF_RUBY_SKIP_NATIVE_RESUME=false.
 // Evaluated per-process at attach time; could be hoisted to Loader if needed.
 func skipNativeResume() bool {
 	v := os.Getenv("OTEL_EBPF_RUBY_SKIP_NATIVE_RESUME")
+	if v == "" {
+		return true
+	}
 	return strings.EqualFold(v, "true") || v == "1"
 }
 
@@ -371,8 +374,8 @@ func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libp
 
 		Running_ec: r.vmStructs.rb_ractor_struct.running_ec,
 
-		// Skip native resume for cfuncs to save tail calls when opted in.
-		// Enable with OTEL_EBPF_RUBY_SKIP_NATIVE_RESUME=true.
+		// Skip native resume for cfuncs to save tail calls.
+		// Default true; opt-out via OTEL_EBPF_RUBY_SKIP_NATIVE_RESUME=false.
 		Skip_native_resume: skipNativeResume(),
 	}
 
