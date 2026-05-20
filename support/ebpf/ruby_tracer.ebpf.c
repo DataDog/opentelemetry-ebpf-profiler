@@ -461,11 +461,14 @@ static EBPF_INLINE ErrorCode walk_ruby_stack(
       // unwinding — the native unwinder could encounter the JIT anonymous
       // mapping and re-enter the Ruby unwinder, causing incorrect frames.
       *next_unwinder = rubyinfo->skip_native_resume ? PROG_UNWIND_STOP : PROG_UNWIND_NATIVE;
-    } else {
-      // If we aren't at the end, advance the stack pointer to continue from the next frame
-      stack_ptr += rubyinfo->size_of_control_frame_struct;
+      // End of Ruby stack: bail out so we don't re-read the same cfp.
+      // The natural for-loop exit clobbers *next_unwinder with PROG_UNWIND_RUBY,
+      // which would otherwise spin forever on the final frame.
+      goto save_state;
     }
-    // If the next winder is native, save state and move to next unwinder
+    // Advance the stack pointer to continue from the next frame
+    stack_ptr += rubyinfo->size_of_control_frame_struct;
+    // If a cfunc requested native unwinding, save state and move to next unwinder
     if (*next_unwinder == PROG_UNWIND_NATIVE)
       goto save_state;
   }
