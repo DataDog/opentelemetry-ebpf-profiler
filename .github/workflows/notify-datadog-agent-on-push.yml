@@ -1,0 +1,25 @@
+name: Notify datadog-agent on push to datadog branch
+
+on:
+  push:
+    branches: [datadog]
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for dd-octo-sts OIDC token
+    steps:
+      - uses: DataDog/dd-octo-sts-action@96a25462dbcb10ebf0bfd6e2ccc917d2ab235b9a # v1.0.4
+        id: octo-sts
+        with:
+          scope: DataDog/datadog-agent
+          policy: opentelemetry-ebpf-profiler.notify-datadog-agent-on-push.dispatch
+
+      - uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3.0.0
+        with:
+          token: ${{ steps.octo-sts.outputs.token }}
+          repository: DataDog/datadog-agent
+          event-type: ebpf-profiler-datadog-branch-updated
