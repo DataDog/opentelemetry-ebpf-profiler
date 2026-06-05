@@ -470,6 +470,19 @@ func (pm *ProcessManager) processPIDExit(pid libpf.PID) {
 	}
 	pm.pidPageToMappingInfoSize -= min(pm.pidPageToMappingInfoSize, deleted)
 	pm.processRemovedInterpreters(pid, libpf.Set[util.OnDiskFileIdentifier]{})
+
+	// Tear down any USDT attachments held for this PID. Detach() does kernel
+	// work (closes uprobe links) and must not run while pm.mu is held. Hand
+	// the Instance off to a goroutine so it cleans up after this function
+	// has released the lock via its deferred Unlock.
+	if inst, ok := pm.usdtInstances[pid]; ok {
+		delete(pm.usdtInstances, pid)
+		go func() {
+			if derr := inst.Detach(); derr != nil {
+				log.Errorf("USDT detach for PID %d: %v", pid, derr)
+			}
+		}()
+	}
 }
 
 // SynchronizeProcess triggers ProcessManager to update its internal information
@@ -724,6 +737,42 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		// additional code (e.g. plugins, Asterisk).
 		// Also see: Unified PID Events design doc
 		pm.ebpf.RemoveReportedPID(pid)
+	}
+
+	// Reconcile USDT attachments for this PID. Runs on every sync (not only
+	// on first sight) so probes inside libraries dlopen'd after process
+	// start get picked up on a subsequent sync. The Manager is nil when USDT
+	// support is disabled at startup.
+	if pm.usdtManager != nil {
+		pm.mu.Lock()
+		prev := pm.usdtInstances[pid]
+		pm.mu.Unlock()
+
+		inst, err := pm.usdtManager.Reconcile(pid, pr, prev)
+		if err != nil {
+			log.Warnf("USDT reconcile for PID %d: %v", pid, err)
+		}
+		if inst != nil {
+			// Re-check that the PID is still tracked before committing.
+			// processPIDExit may have fired concurrently while Reconcile
+			// was running and torn down our previous Instance; writing the
+			// freshly-built one in that case would leak its links until the
+			// next exit. If the PID is gone, detach what we just built.
+			pm.mu.Lock()
+			_, stillTracked := pm.pidToProcessInfo[pid]
+			if stillTracked {
+				pm.usdtInstances[pid] = inst
+			}
+			pm.mu.Unlock()
+
+			if !stillTracked {
+				go func() {
+					if derr := inst.Detach(); derr != nil {
+						log.Errorf("USDT detach for exited PID %d: %v", pid, derr)
+					}
+				}()
+			}
+		}
 	}
 }
 

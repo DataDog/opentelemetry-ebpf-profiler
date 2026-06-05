@@ -30,6 +30,7 @@ import (
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+	"go.opentelemetry.io/ebpf-profiler/usdt"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
@@ -64,7 +65,8 @@ var (
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
 	executableUnloadDelay time.Duration, ebpf pmebpf.EbpfHandler, traceReporter reporter.TraceReporter,
 	exeReporter reporter.ExecutableReporter, sdp nativeunwind.StackDeltaProvider,
-	filterErrorFrames bool, includeEnvVars libpf.Set[string]) (*ProcessManager, error) {
+	filterErrorFrames bool, includeEnvVars libpf.Set[string],
+	usdtMgr *usdt.Manager) (*ProcessManager, error) {
 	if exeReporter == nil {
 		exeReporter = executableReporterStub{}
 	}
@@ -117,6 +119,8 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		includeEnvVars:           includeEnvVars,
 		selfCgroupIno:            selfCgroupIno,
 		selfContainerID:          selfContainerID,
+		usdtManager:              usdtMgr,
+		usdtInstances:            make(map[libpf.PID]*usdt.Instance),
 	}
 
 	collectInterpreterMetrics(ctx, pm, monitorInterval)
