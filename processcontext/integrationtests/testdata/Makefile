@@ -21,7 +21,7 @@ GCC       ?= $(ARCH)-linux-gnu-gcc
 MUSL_GCC  ?= $(ARCH)-linux-musl-gcc
 
 
-BINARIES := processctx_exe_glibc processctx_exe_musl processctx_lib_glibc processctx_lib_musl processctx_dlopen_glibc processctx_dlopen_musl
+BINARIES := processctx_exe_glibc processctx_exe_musl processctx_lib_glibc processctx_lib_musl processctx_dlopen_glibc processctx_dlopen_musl libprocessctx_glibc.so libprocessctx_musl.so libprocessctx_glibc_gnu.so processctx_lib_glibc_gnu
 
 all: $(BINARIES)
 
@@ -37,11 +37,17 @@ processctx_exe_musl: processctx.c processctx_lib.c processctx_lib.h otel_process
 libprocessctx_glibc.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
 	$(GCC) -shared -fPIC -mtls-dialect=$(TLS_DIALECT) -o $@ $< otel_process_ctx.c
 
+libprocessctx_glibc_gnu.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(GCC) -shared -fPIC -o $@ $< otel_process_ctx.c
+
 libprocessctx_musl.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
 	$(MUSL_GCC) -shared -fPIC -mtls-dialect=$(TLS_DIALECT) -o $@ $< otel_process_ctx.c
 
 processctx_lib_glibc: processctx.c processctx_lib.h libprocessctx_glibc.so
 	$(GCC) -o $@ $< -L. -lprocessctx_glibc -Wl,-rpath='$$ORIGIN'
+
+processctx_lib_glibc_gnu: processctx.c processctx_lib.h libprocessctx_glibc_gnu.so
+	$(GCC) -o $@ $< -L. -lprocessctx_glibc_gnu -Wl,-rpath='$$ORIGIN'
 
 processctx_lib_musl: processctx.c processctx_lib.h libprocessctx_musl.so
 	$(MUSL_GCC) -o $@ $< -L. -lprocessctx_musl -Wl,-rpath=/lib/x86_64-linux-musl/ -Wl,-rpath='$$ORIGIN'

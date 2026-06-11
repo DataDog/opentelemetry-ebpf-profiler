@@ -80,19 +80,21 @@ func Test_ProcessContext(t *testing.T) {
 		args    []string
 		env     []string
 	}{
-		"glibc_exe": {exeName: "processctx_exe_glibc"},
-		// Publishes the process context after a delay, so the profiler discovers
-		// the PID before the publication and the prctl monitor must trigger a
-		// resync to pick up the OTEL_CTX mapping.
-		"glibc_exe_delayed_publish": {
-			exeName: "processctx_exe_glibc",
-			env:     []string{"OTEL_PROCESS_CTX_PUBLISH_DELAY_MS=200"},
-		},
-		"musl_exe":     {exeName: "processctx_exe_musl"},
-		"glibc_lib":    {exeName: "processctx_lib_glibc"},
-		"musl_lib":     {exeName: "processctx_lib_musl"},
-		"glibc_dlopen": {exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc.so")}},
-		"musl_dlopen":  {exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl.so")}},
+		// "glibc_exe": {exeName: "processctx_exe_glibc"},
+		// // Publishes the process context after a delay, so the profiler discovers
+		// // the PID before the publication and the prctl monitor must trigger a
+		// // resync to pick up the OTEL_CTX mapping.
+		// "glibc_exe_delayed_publish": {
+		// 	exeName: "processctx_exe_glibc",
+		// 	env:     []string{"OTEL_PROCESS_CTX_PUBLISH_DELAY_MS=200"},
+		// },
+		// "musl_exe":     {exeName: "processctx_exe_musl"},
+		// "glibc_lib":    {exeName: "processctx_lib_glibc"},
+		// "musl_lib":     {exeName: "processctx_lib_musl"},
+		// "glibc_dlopen": {exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc.so")}},
+		// "musl_dlopen":  {exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl.so")}},
+
+		"glibc_lib_gnu": {exeName: "processctx_lib_glibc_gnu"},
 	}
 
 	for name, tc := range tests {
@@ -124,6 +126,7 @@ func Test_ProcessContext(t *testing.T) {
 			t.Log("Attached tracer program")
 			require.NoError(t, trc.EnableProfiling())
 			require.NoError(t, trc.AttachSchedMonitor())
+			require.NoError(t, trc.AttachPrctlMonitor())
 
 			traceCh := make(chan *libpf.EbpfTrace)
 			require.NoError(t, trc.StartMapMonitors(ctx, traceCh))

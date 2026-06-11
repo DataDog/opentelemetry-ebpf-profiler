@@ -54,6 +54,7 @@ int tracepoint__sys_enter_prctl(struct sys_enter_prctl_ctx *ctx)
     goto exit;
   }
 
+  DEBUG_PRINT("PR_SET_VMA_ANON_NAME: OTEL_CTX detected for PID %d", pid);
   if (report_pid(ctx, pid_tgid, RATELIMIT_ACTION_DEFAULT)) {
     increment_metric(metricID_NumPrctlSetVmaOtelCtx);
   }

@@ -874,6 +874,7 @@ func readProcessContext(
 		case err == nil:
 			processCtx = c
 			processContextRead = true
+			log.Infof("ProcessContext read for PID %d: %+v, thread context: %+v", pid, processCtx, processCtx.ThreadContext)
 		case errors.Is(err, processcontext.ErrNoUpdate),
 			errors.Is(err, processcontext.ErrConcurrentUpdate):
 			// Note that if processMetaUpdated is true, the caller will discard the previous process context and therefore
