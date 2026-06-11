@@ -5,8 +5,5 @@ static PROTO: &str = "../symb-proto/symbfile.proto";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed={PROTO}");
-    Ok(prost_build::compile_protos(
-        &[PROTO],
-        &["../symb-proto"],
-    )?)
+    Ok(prost_build::compile_protos(&[PROTO], &["../symb-proto"])?)
 }

@@ -98,10 +98,11 @@ const (
 )
 
 const (
-	TraceOriginUnknown  = C.TRACE_UNKNOWN
-	TraceOriginSampling = C.TRACE_SAMPLING
-	TraceOriginOffCPU   = C.TRACE_OFF_CPU
-	TraceOriginProbe    = C.TRACE_PROBE
+	TraceOriginUnknown   = C.TRACE_UNKNOWN
+	TraceOriginSampling  = C.TRACE_SAMPLING
+	TraceOriginOffCPU    = C.TRACE_OFF_CPU
+	TraceOriginProbe     = C.TRACE_PROBE
+	TraceOriginHeapAlloc = C.TRACE_HEAP_ALLOC
 )
 
 type ApmSpanID C.ApmSpanID

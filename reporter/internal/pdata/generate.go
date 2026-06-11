@@ -97,6 +97,7 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 			support.TraceOriginSampling,
 			support.TraceOriginOffCPU,
 			support.TraceOriginProbe,
+			support.TraceOriginHeapAlloc,
 		} {
 			if len(toEvents.Events[origin]) == 0 {
 				// Do not append empty profiles.
@@ -167,6 +168,10 @@ func (p *Pdata) setProfile(
 	case support.TraceOriginProbe:
 		st.SetTypeStrindex(stringSet.Add("events"))
 		st.SetUnitStrindex(stringSet.Add("count"))
+	case support.TraceOriginHeapAlloc:
+		st.SetTypeStrindex(stringSet.Add("alloc_space"))
+		st.SetUnitStrindex(stringSet.Add("bytes"))
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=pdata_profile_start stacks=%d", len(events))
 	default:
 		// Should never happen
 		return fmt.Errorf("generating profile for unsupported origin %d", origin)
@@ -176,7 +181,7 @@ func (p *Pdata) setProfile(
 		sample := profile.Samples().AppendEmpty()
 
 		sample.TimestampsUnixNano().FromRaw(traceInfo.Timestamps)
-		if origin == support.TraceOriginOffCPU {
+		if origin == support.TraceOriginOffCPU || origin == support.TraceOriginHeapAlloc {
 			sample.Values().Append(traceInfo.Values...)
 		}
 
@@ -291,7 +296,11 @@ func (p *Pdata) setProfile(
 		}
 	} // End sample processing
 
-	log.Debugf("Reporting OTLP profile with %d samples", profile.Samples().Len())
+	if origin == support.TraceOriginHeapAlloc {
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=pdata_profile_built samples=%d", profile.Samples().Len())
+	} else {
+		log.Debugf("Reporting OTLP profile with %d samples", profile.Samples().Len())
+	}
 
 	profile.SetDurationNano(uint64(collectionEndTime.Sub(collectionStartTime).Nanoseconds()))
 	profile.SetTime(pcommon.Timestamp(collectionStartTime.UnixNano()))

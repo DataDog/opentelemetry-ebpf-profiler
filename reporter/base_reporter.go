@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
@@ -46,11 +47,25 @@ func (b *baseReporter) Stop() {
 	b.runLoop.Stop()
 }
 
+func countHeapProfileEvents(tree samples.TraceEventsTree) (stacks, samplesCount int, valueSum int64) {
+	for _, resource := range tree {
+		for _, events := range resource.Events[support.TraceOriginHeapAlloc] {
+			stacks++
+			samplesCount += len(events.Timestamps)
+			for _, value := range events.Values {
+				valueSum += value
+			}
+		}
+	}
+	return stacks, samplesCount, valueSum
+}
+
 func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error {
 	switch meta.Origin {
 	case support.TraceOriginSampling:
 	case support.TraceOriginOffCPU:
 	case support.TraceOriginProbe:
+	case support.TraceOriginHeapAlloc:
 	default:
 		return fmt.Errorf("skip reporting trace for %d origin: %w", meta.Origin,
 			errUnknownOrigin)
@@ -95,7 +110,16 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 	if events, exists := rtp.Events[meta.Origin][sampleKey]; exists {
 		events.Timestamps = append(events.Timestamps, uint64(meta.Timestamp))
 		events.Values = append(events.Values, meta.Value)
+		if meta.Origin == support.TraceOriginHeapAlloc {
+			log.Debugf("HEAP_PROFILE_PIPELINE stage=reporter_aggregated pid=%d tid=%d value=%d frames=%d count=%d",
+				meta.PID, meta.TID, meta.Value, len(trace.Frames), len(events.Timestamps))
+		}
 		return nil
+	}
+
+	if meta.Origin == support.TraceOriginHeapAlloc {
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=reporter_recorded pid=%d tid=%d value=%d frames=%d",
+			meta.PID, meta.TID, meta.Value, len(trace.Frames))
 	}
 
 	rtp.Events[meta.Origin][sampleKey] = &samples.TraceEvents{

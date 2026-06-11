@@ -55,7 +55,7 @@ func (m *Manager) attach(
 	if err != nil {
 		return nil, fmt.Errorf("attach uprobe at %s+%#x: %w", path, p.Location, err)
 	}
-	log.Debugf("USDT attached pid=%d kind=%d path=%s offset=%#x semaphore=%#x",
+	log.Debugf("HEAP_PROFILE_PIPELINE stage=usdt_attached pid=%d kind=%d path=%s offset=%#x semaphore=%#x",
 		pid, p.Kind, path, p.Location, p.SemaphoreOffset)
 	return lnk, nil
 }

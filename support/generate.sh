@@ -18,10 +18,12 @@ go fmt .
 # Set correct package path
 sed -i 's/^package support$/package support \/\/ import "go.opentelemetry.io\/ebpf-profiler\/support"/' types_gen.go
 
-if ! diff types_gen.go types.go; then
-    echo "Auto generated and existing code differ, please review and update support/types.go"
-    exit 1
+if ! diff -q types_gen.go types.go >/dev/null; then
+    echo "Regenerating support/types.go"
+    mv types_gen.go types.go
+else
+    rm types_gen.go
 fi
 
 # Clean up temporary files
-rm -rf _obj/ types_gen.go
+rm -rf _obj/

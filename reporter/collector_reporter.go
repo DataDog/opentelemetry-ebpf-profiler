@@ -90,6 +90,12 @@ func (r *CollectorReporter) reportProfile(ctx context.Context) error {
 	r.collectionStartTime = collectionEndTime
 	r.traceEvents.WUnlock(&traceEventsPtr)
 
+	heapStacks, heapSamples, heapValueSum := countHeapProfileEvents(reportedEvents)
+	if heapSamples > 0 {
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=reporter_flush_collector heap_stacks=%d heap_samples=%d heap_value_sum=%d",
+			heapStacks, heapSamples, heapValueSum)
+	}
+
 	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
 		collectionStartTime, collectionEndTime)
 	if err != nil {
@@ -102,5 +108,17 @@ func (r *CollectorReporter) reportProfile(ctx context.Context) error {
 		return nil
 	}
 
-	return r.nextConsumer.ConsumeProfiles(ctx, profiles)
+	if heapSamples > 0 {
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=collector_consume_start heap_samples=%d total_samples=%d resource_profiles=%d",
+			heapSamples, profiles.SampleCount(), profiles.ResourceProfiles().Len())
+	}
+	err = r.nextConsumer.ConsumeProfiles(ctx, profiles)
+	if heapSamples > 0 {
+		if err != nil {
+			log.Warnf("HEAP_PROFILE_PIPELINE stage=collector_consume_error heap_samples=%d err=%v", heapSamples, err)
+		} else {
+			log.Debugf("HEAP_PROFILE_PIPELINE stage=collector_consume_success heap_samples=%d", heapSamples)
+		}
+	}
+	return err
 }

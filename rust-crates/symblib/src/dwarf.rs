@@ -430,7 +430,12 @@ impl fmt::Debug for Unit<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // We add the header length here to obtain the offset of the first DIE.
         let hdr_len = self.unit.gimli_unit.header.size_of_header();
-        let offs = self.unit.gimli_unit.header.offset().to_debug_info_offset(&self.unit.gimli_unit.header);
+        let offs = self
+            .unit
+            .gimli_unit
+            .header
+            .offset()
+            .to_debug_info_offset(&self.unit.gimli_unit.header);
         let offs = offs.expect("we don't inspect type sections").0 + hdr_len;
 
         let name = self.name().unwrap_or(Cow::Borrowed("<unnamed>"));

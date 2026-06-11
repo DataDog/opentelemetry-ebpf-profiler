@@ -121,6 +121,12 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 	r.collectionStartTime = collectionEndTime
 	r.traceEvents.WUnlock(&traceEventsPtr)
 
+	heapStacks, heapSamples, heapValueSum := countHeapProfileEvents(reportedEvents)
+	if heapSamples > 0 {
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=reporter_flush_otlp heap_stacks=%d heap_samples=%d heap_value_sum=%d",
+			heapStacks, heapSamples, heapValueSum)
+	}
+
 	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
 		collectionStartTime, collectionEndTime)
 	if err != nil {
@@ -134,9 +140,21 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 
 	req := pprofileotlp.NewExportRequestFromProfiles(profiles)
 
+	if heapSamples > 0 {
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=otlp_export_start heap_samples=%d total_samples=%d resource_profiles=%d",
+			heapSamples, profiles.SampleCount(), profiles.ResourceProfiles().Len())
+	}
+
 	reqCtx, ctxCancel := context.WithTimeout(ctx, r.pkgGRPCOperationTimeout)
 	defer ctxCancel()
 	_, err = r.client.Export(reqCtx, req, gzipOption)
+	if heapSamples > 0 {
+		if err != nil {
+			log.Warnf("HEAP_PROFILE_PIPELINE stage=otlp_export_error heap_samples=%d err=%v", heapSamples, err)
+		} else {
+			log.Debugf("HEAP_PROFILE_PIPELINE stage=otlp_export_success heap_samples=%d", heapSamples)
+		}
+	}
 	return err
 }
 

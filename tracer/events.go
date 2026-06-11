@@ -242,6 +242,10 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 					continue
 				}
 
+				if trace.Origin == support.TraceOriginHeapAlloc {
+					log.Debugf("HEAP_PROFILE_PIPELINE stage=ringbuf_read pid=%d tid=%d value=%d frames=%d ktime=%d",
+						trace.PID, trace.TID, trace.Value, trace.NumFrames, trace.KTime)
+				}
 				if minKTime == 0 || trace.KTime < minKTime {
 					minKTime = trace.KTime
 				}

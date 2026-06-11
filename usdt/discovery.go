@@ -58,8 +58,8 @@ func (m *Manager) scanMapping(
 	}
 
 	if len(probes) > 0 {
-		log.Debugf("USDT parsed %d probe notes from PID %d mapping %#x-%#x (%s)",
-			len(probes), pr.PID(), mapping.Vaddr, mapping.Vaddr+mapping.Length, mapping.Path)
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=usdt_parsed pid=%d notes=%d mapping=%#x-%#x path=%s",
+			pr.PID(), len(probes), mapping.Vaddr, mapping.Vaddr+mapping.Length, mapping.Path)
 	}
 
 	// Filter to the provider we care about and translate names to ProbeKind.
@@ -81,8 +81,8 @@ func (m *Manager) scanMapping(
 	}
 
 	if len(out) > 0 {
-		log.Debugf("USDT discovered %d heap probe(s) from PID %d mapping %#x-%#x (%s)",
-			len(out), pr.PID(), mapping.Vaddr, mapping.Vaddr+mapping.Length, mapping.Path)
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=usdt_discovered pid=%d heap_probes=%d mapping=%#x-%#x path=%s",
+			pr.PID(), len(out), mapping.Vaddr, mapping.Vaddr+mapping.Length, mapping.Path)
 	}
 
 	// Cache even empty results so probe-less binaries aren't re-parsed.
