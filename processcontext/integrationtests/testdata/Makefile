@@ -21,7 +21,11 @@ GCC       ?= $(ARCH)-linux-gnu-gcc
 MUSL_GCC  ?= $(ARCH)-linux-musl-gcc
 
 
-BINARIES := processctx_exe_glibc processctx_exe_musl processctx_lib_glibc processctx_lib_musl processctx_dlopen_glibc processctx_dlopen_musl
+BINARIES := processctx_exe_glibc processctx_exe_musl processctx_lib_glibc processctx_lib_musl processctx_dlopen_glibc processctx_dlopen_musl libprocessctx_glibc.so libprocessctx_musl.so
+
+ifeq ($(ARCH),x86_64)
+BINARIES += processctx_lib_glibc_gnu libprocessctx_glibc_gnu.so processctx_lib_musl_gnu libprocessctx_musl_gnu.so
+endif
 
 all: $(BINARIES)
 
@@ -51,3 +55,18 @@ processctx_dlopen_glibc: processctx.c
 
 processctx_dlopen_musl: processctx.c
 	$(MUSL_GCC) -o $@ $< -DUSE_DLOPEN -Wl,-rpath=/lib/x86_64-linux-musl/ 
+
+ifeq ($(ARCH),x86_64)
+# Tests for GNU TLS model on x86_64.
+libprocessctx_glibc_gnu.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(GCC) -shared -fPIC -o $@ $< otel_process_ctx.c
+
+processctx_lib_glibc_gnu: processctx.c processctx_lib.h libprocessctx_glibc_gnu.so
+	$(GCC) -o $@ $< -L. -lprocessctx_glibc_gnu -Wl,-rpath='$$ORIGIN'
+
+libprocessctx_musl_gnu.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(MUSL_GCC) -shared -fPIC -o $@ $< otel_process_ctx.c
+
+processctx_lib_musl_gnu: processctx.c processctx_lib.h libprocessctx_musl_gnu.so
+	$(MUSL_GCC) -o $@ $< -L. -lprocessctx_musl_gnu -Wl,-rpath=/lib/x86_64-linux-musl/ -Wl,-rpath='$$ORIGIN'
+endif
