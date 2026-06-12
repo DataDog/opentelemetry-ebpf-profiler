@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -75,26 +76,31 @@ func Test_ProcessContext(t *testing.T) {
 	require.NoError(t, err)
 	exeDir := filepath.Join(curDir, "testdata")
 
-	tests := map[string]struct {
+	type testCase struct {
 		exeName string
 		args    []string
 		env     []string
-	}{
-		// "glibc_exe": {exeName: "processctx_exe_glibc"},
-		// // Publishes the process context after a delay, so the profiler discovers
-		// // the PID before the publication and the prctl monitor must trigger a
-		// // resync to pick up the OTEL_CTX mapping.
-		// "glibc_exe_delayed_publish": {
-		// 	exeName: "processctx_exe_glibc",
-		// 	env:     []string{"OTEL_PROCESS_CTX_PUBLISH_DELAY_MS=200"},
-		// },
-		// "musl_exe":     {exeName: "processctx_exe_musl"},
-		// "glibc_lib":    {exeName: "processctx_lib_glibc"},
-		// "musl_lib":     {exeName: "processctx_lib_musl"},
-		// "glibc_dlopen": {exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc.so")}},
-		// "musl_dlopen":  {exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl.so")}},
-
-		"glibc_lib_gnu": {exeName: "processctx_lib_glibc_gnu"},
+	}
+	tests := map[string]testCase{
+		"glibc_exe": {exeName: "processctx_exe_glibc"},
+		// Publishes the process context after a delay, so the profiler discovers
+		// the PID before the publication and the prctl monitor must trigger a
+		// resync to pick up the OTEL_CTX mapping.
+		"glibc_exe_delayed_publish": {
+			exeName: "processctx_exe_glibc",
+			env:     []string{"OTEL_PROCESS_CTX_PUBLISH_DELAY_MS=200"},
+		},
+		"musl_exe":     {exeName: "processctx_exe_musl"},
+		"glibc_lib":    {exeName: "processctx_lib_glibc"},
+		"musl_lib":     {exeName: "processctx_lib_musl"},
+		"glibc_dlopen": {exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc.so")}},
+		"musl_dlopen":  {exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl.so")}},
+	}
+	if runtime.GOARCH == "x86_64" {
+		tests["glibc_lib_gnu"] = testCase{exeName: "processctx_lib_glibc_gnu"}
+		tests["musl_lib_gnu"] = testCase{exeName: "processctx_lib_musl_gnu"}
+		tests["glibc_dlopen_gnu"] = testCase{exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc_gnu.so")}}
+		tests["musl_dlopen_gnu"] = testCase{exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl_gnu.so")}}
 	}
 
 	for name, tc := range tests {

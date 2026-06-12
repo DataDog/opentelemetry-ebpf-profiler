@@ -93,6 +93,8 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	}
 
 	var tlsDescElfAddr libpf.Address
+	var tlsModElfAddr libpf.Address
+	var tlsOffElfAddr libpf.Address
 	var tlsOffset uint64
 	if err = ef.VisitTLSRelocations(func(r pfelf.ElfReloc, symName string) bool {
 		if symName == tlsExport {
@@ -111,18 +113,42 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 
 		// For now only support executable TLS model.
 		if !isExecutable(ef) {
-			return nil, errors.New("unsupported TLS model")
-		}
-		tlsOffset, err = getStaticTLSOffset(ef, threadStorageSym)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get static TLS offset: %v", err)
+			if ef.Machine == elf.EM_AARCH64 {
+				return nil, errors.New("unsupported TLS model")
+			}
+			if err = ef.VisitRelocations(func(r pfelf.ElfReloc, symname string) bool {
+				if symname == tlsExport {
+					relocType := elf.R_X86_64(r.Info & 0xffff)
+					if relocType == elf.R_X86_64_DTPOFF64 && r.Addend == 0 {
+						tlsOffElfAddr = libpf.Address(r.Off)
+
+					} else if relocType == elf.R_X86_64_DTPMOD64 {
+						tlsModElfAddr = libpf.Address(r.Off)
+					}
+					return tlsOffElfAddr == 0 || tlsModElfAddr == 0
+				}
+				return true
+			}, pfelf.RelDTOFF64|pfelf.RelDTPMOD64); err != nil {
+				return nil, fmt.Errorf("failed to visit relocations: %v", err)
+			}
+
+			if tlsOffElfAddr == 0 || tlsModElfAddr == 0 {
+				return nil, errors.New("failed to locate TLS offset or module ID relocations")
+			}
+		} else {
+			tlsOffset, err = getStaticTLSOffset(ef, threadStorageSym)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get static TLS offset: %v", err)
+			}
 		}
 	}
-	log.Infof("Native thread labels TLS descriptor address: 0x%08X, TLS offset: 0x%08X", tlsDescElfAddr, tlsOffset)
+	log.Infof("Native thread labels TLS descriptor address: 0x%08X, TLS offset: 0x%08X, TLS module ID address: 0x%08X, TLS offset address: 0x%08X", tlsDescElfAddr, tlsOffset, tlsModElfAddr, tlsOffElfAddr)
 
 	return &data{
 		tlsDescElfAddr: tlsDescElfAddr,
 		tlsOffset:      tlsOffset,
+		tlsModElfAddr:  tlsModElfAddr,
+		tlsOffElfAddr:  tlsOffElfAddr,
 	}, nil
 }
 
@@ -160,6 +186,8 @@ func getStaticTLSOffset(ef *pfelf.File, threadStorageSym *libpf.Symbol) (uint64,
 type data struct {
 	tlsDescElfAddr libpf.Address
 	tlsOffset      uint64
+	tlsModElfAddr  libpf.Address
+	tlsOffElfAddr  libpf.Address
 }
 
 var _ interpreter.Data = &data{}
@@ -175,28 +203,46 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	if d.tlsOffset != 0 {
 		tlsOffset = d.tlsOffset
 	} else {
-		// Read TLS offset from the TLS descriptor.
-		tlsOffset = rm.Uint64(bias + d.tlsDescElfAddr + 8)
-
-		// If dynamic TLS is used, tlsOffset will be a pointer to a tls_index structure.
-		// On x86_64, the offset is negative so it is easy to distinguish between dynamic and static TLS.
-		// On aarch64, the offset is positive so we use an arbitrary size to distinguish between dynamic and static TLS.
-		if int64(tlsOffset) > 0xffffffff {
-			// dynamic TLS is used, read the tls_index structure.
-			moduleID := rm.Uint64(libpf.Address(tlsOffset))
-			tlsOffset = rm.Uint64(libpf.Address(tlsOffset + 8))
-
+		var moduleID uint64
+		if d.tlsModElfAddr != 0 {
+			moduleID = rm.Uint64(bias + d.tlsModElfAddr)
 			if moduleID == 0 {
 				return nil, fmt.Errorf("unexpected value 0 for moduleID in dynamic TLS")
 			}
 
-			log.Infof("PID %d dynamic TLS moduleID: %d, tls offset: 0x%08X", pid, moduleID, tlsOffset)
+			tlsOffset = rm.Uint64(bias + d.tlsOffElfAddr)
+			log.Infof("PID %d dynamic TLS (gnu) moduleID: %d, tls offset: 0x%08X", pid, moduleID, tlsOffset)
 
 			// Do not update proc data here, wait for libc info to be available.
 			return &Instance{
 				tlsOffset: int32(int64(tlsOffset)),
 				moduleID:  int32(int64(moduleID)),
 			}, nil
+
+		} else {
+			// Read TLS offset from the TLS descriptor.
+			tlsOffset = rm.Uint64(bias + d.tlsDescElfAddr + 8)
+
+			// If dynamic TLS is used, tlsOffset will be a pointer to a tls_index structure.
+			// On x86_64, the offset is negative so it is easy to distinguish between dynamic and static TLS.
+			// On aarch64, the offset is positive so we use an arbitrary size to distinguish between dynamic and static TLS.
+			if int64(tlsOffset) > 0xffffffff {
+				// dynamic TLS is used, read the tls_index structure.
+				moduleID = rm.Uint64(libpf.Address(tlsOffset))
+				tlsOffset = rm.Uint64(libpf.Address(tlsOffset + 8))
+
+				if moduleID == 0 {
+					return nil, fmt.Errorf("unexpected value 0 for moduleID in dynamic TLS")
+				}
+
+				log.Infof("PID %d dynamic TLS moduleID: %d, tls offset: 0x%08X", pid, moduleID, tlsOffset)
+
+				// Do not update proc data here, wait for libc info to be available.
+				return &Instance{
+					tlsOffset: int32(int64(tlsOffset)),
+					moduleID:  int32(int64(moduleID)),
+				}, nil
+			}
 		}
 	}
 
