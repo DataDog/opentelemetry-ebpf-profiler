@@ -109,6 +109,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		ProbeLinks:             c.config.ProbeLinks,
 		LoadProbe:              c.config.LoadProbe,
 		HeapProfiling:          c.config.HeapProfiling,
+		LiveHeapProfiling:      c.config.LiveHeapProfiling,
 		ExecutableReporter:     c.config.ExecutableReporter,
 		BPFFSRoot:              c.config.BPFFSRoot,
 		OBIProcessCtx:          c.config.OBIProcessCtx,

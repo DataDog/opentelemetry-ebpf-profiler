@@ -57,6 +57,8 @@ type Config struct {
 	ProbeLinks             []string      `mapstructure:"probe_links"`
 	LoadProbe              bool          `mapstructure:"load_probe"`
 	HeapProfiling          bool          `mapstructure:"heap_profiling"`
+	LiveHeapProfiling         bool `mapstructure:"live_heap_profiling"`
+	LiveHeapMaxEntriesPerPID  int  `mapstructure:"live_heap_max_entries_per_pid"`
 	MapScaleFactor         uint          `mapstructure:"map_scale_factor"`
 	BPFVerifierLogLevel    uint          `mapstructure:"bpf_verifier_log_level"`
 	NoKernelVersionCheck   bool          `mapstructure:"no_kernel_version_check"`

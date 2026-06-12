@@ -197,6 +197,10 @@ type Config struct {
 	// HeapProfiling enables loading of the heap USDT uprobe entry programs
 	// and per-process attach via the usdt package.
 	HeapProfiling bool
+	// LiveHeapProfiling additionally tracks deallocations so the live
+	// (in-use) heap can be reported, by loading and attaching the heap free
+	// USDT probe alongside the alloc probe. Requires HeapProfiling.
+	LiveHeapProfiling bool
 	// BPFFSRoot is the root path to BPF filesystem for pinned maps and programs.
 	BPFFSRoot string
 	// OBIProcessCtx enable the use of a known shared eBPF map with OBI.
@@ -246,6 +250,10 @@ func newTracePool() sync.Pool {
 
 // NewTracer loads eBPF code and map definitions from the ELF module at the configured path.
 func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
+	if cfg.LiveHeapProfiling && !cfg.HeapProfiling {
+		return nil, errors.New("live heap profiling requires heap profiling to be enabled")
+	}
+
 	kernelSymbolizer, err := kallsyms.NewSymbolizer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read kernel symbols: %v", err)
@@ -277,7 +285,10 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		if p, ok := ebpfProgs["uprobe_heap_alloc"]; ok {
 			usdtProgs[usdt.ProbeHeapAlloc] = p
 		}
-		if p, ok := ebpfProgs["uprobe_heap_free"]; ok {
+		// Only register the free probe when live heap profiling is opted
+		// into; without it the program is not loaded and frees are never
+		// instrumented.
+		if p, ok := ebpfProgs["uprobe_heap_free"]; ok && cfg.LiveHeapProfiling {
 			usdtProgs[usdt.ProbeHeapFree] = p
 		}
 		if usdtMgr, err = usdt.NewManager(usdtProgs); err != nil {
@@ -526,9 +537,12 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		// USDT entry points for heap profiling. Attached PID-scoped from
 		// userspace by the usdt package; they themselves tail-call into
 		// the shared uprobe unwinder chain loaded above.
+		// The free probe is only needed to track deallocations for live
+		// (in-use) heap reporting; plain allocation profiling never
+		// consumes free events, so don't load it unless opted in.
 		heapProgs := []progLoaderHelper{
 			{name: "uprobe_heap_alloc", noTailCallTarget: true, enable: true},
-			{name: "uprobe_heap_free", noTailCallTarget: true, enable: true},
+			{name: "uprobe_heap_free", noTailCallTarget: true, enable: cfg.LiveHeapProfiling},
 		}
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], heapProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {

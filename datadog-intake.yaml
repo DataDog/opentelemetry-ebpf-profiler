@@ -1,0 +1,33 @@
+# Send profiles from the local OpenTelemetry eBPF profiler directly to Datadog's
+# OTLP/HTTP intake. DD_API_KEY and DD_SITE are provided by ./run-dd.sh.
+receivers:
+  profiling:
+    # Mirrors the current local heap-profiling dev script.
+    heap_profiling: true
+    live_heap_profiling: true
+    tracers: native
+
+exporters:
+  otlphttp/datadog:
+    endpoint: https://otlp.${env:DD_SITE}
+    headers:
+      dd-api-key: ${env:DD_API_KEY}
+      dd-evp-origin: opentelemetry-ebpf-profiler-dev
+      dd-evp-origin-version: dev
+
+service:
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: 8890
+
+  pipelines:
+    profiles:
+      receivers: [profiling]
+      exporters: [otlphttp/datadog]
