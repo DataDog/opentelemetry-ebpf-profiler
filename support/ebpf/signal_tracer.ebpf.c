@@ -41,5 +41,8 @@ int tracepoint__signal_deliver(signal_deliver_ctx *ctx)
   // Pack si_code in the high 32 bits, signal number in the low 32 bits so the
   // Go side can recover both from the single Value field.
   u64 value = ((u64)(u32)ctx->code << 32) | (u32)sig;
-  return collect_trace(ctx, TRACE_SIGNAL, pid, tid, ts, value);
+  // collect_trace expects struct pt_regs * but is safe with any context pointer:
+  // push_kernel_frames uses void *, and get_usermode_regs falls through to
+  // get_task_pt_regs when ctx doesn't look like user-mode pt_regs.
+  return collect_trace((struct pt_regs *)ctx, TRACE_SIGNAL, pid, tid, ts, value);
 }

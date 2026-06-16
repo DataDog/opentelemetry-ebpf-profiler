@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 
 	cebpf "github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
@@ -116,6 +117,114 @@ func parseBTF(vars *sysConfigVars) error {
 	return nil
 }
 
+// globalPID returns the kernel-visible TGID of the current process. Inside a PID
+// namespace, os.Getpid() returns the namespace-local PID while the eBPF helper
+// bpf_get_current_pid_tgid() always returns the initial-namespace (host) TGID.
+// When these differ the system analysis PID check fails silently. This function
+// bootstraps the correct host PID by attaching a tiny tracepoint to
+// sys_enter_bpf, making one BPF map lookup via a unique marker map, and reading
+// back the TGID that the kernel observed. Falls back to os.Getpid() on error.
+func globalPID() uint32 {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// marker: the map whose FD we watch for — unique to this process.
+	marker, err := cebpf.NewMap(&cebpf.MapSpec{
+		Type: cebpf.Array, KeySize: 4, ValueSize: 8, MaxEntries: 1,
+	})
+	if err != nil {
+		return uint32(os.Getpid())
+	}
+	defer marker.Close()
+
+	result, err := cebpf.NewMap(&cebpf.MapSpec{
+		Type: cebpf.Array, KeySize: 4, ValueSize: 8, MaxEntries: 1,
+	})
+	if err != nil {
+		return uint32(os.Getpid())
+	}
+	defer result.Close()
+
+	markerFD := int32(marker.FD())
+
+	// sys_enter_bpf tracepoint context layout (from trace format):
+	//   offset  0: common_type (u16)
+	//   offset  2: common_flags (u8)
+	//   offset  3: common_preempt_count (u8)
+	//   offset  4: common_pid (s32)
+	//   offset  8: __syscall_nr (s32)
+	//   offset 16: cmd (u64)
+	//   offset 24: uattr (u64 — pointer to bpf_attr in user space)
+	//   offset 32: size (u32)
+	//
+	// bpf_attr for BPF_MAP_LOOKUP_ELEM: first field is map_fd (u32).
+	insns := asm.Instructions{
+		// r6 = ctx; r7 = bpf_get_current_pid_tgid()
+		asm.Mov.Reg(asm.R6, asm.R1),
+		asm.FnGetCurrentPidTgid.Call(),
+		asm.Mov.Reg(asm.R7, asm.R0),
+
+		// Read ctx->uattr (offset 24) into stack[-8] via bpf_probe_read_kernel
+		asm.Mov.Reg(asm.R1, asm.RFP), asm.Add.Imm(asm.R1, -8),
+		asm.Mov.Imm(asm.R2, 8),
+		asm.Mov.Reg(asm.R3, asm.R6), asm.Add.Imm(asm.R3, 24),
+		asm.FnProbeReadKernel.Call(),
+		asm.LoadMem(asm.R8, asm.RFP, -8, asm.DWord), // R8 = uattr (user ptr)
+
+		// Read bpf_attr->map_fd (first 4 bytes at uattr) via bpf_probe_read_user
+		asm.Mov.Reg(asm.R1, asm.RFP), asm.Add.Imm(asm.R1, -4),
+		asm.Mov.Imm(asm.R2, 4),
+		asm.Mov.Reg(asm.R3, asm.R8),
+		asm.FnProbeReadUser.Call(),
+		asm.LoadMem(asm.R8, asm.RFP, -4, asm.Word), // R8 = map_fd (s32)
+
+		// if map_fd != markerFD: return without writing
+		asm.Mov.Imm(asm.R9, markerFD),
+		asm.JEq.Reg(asm.R8, asm.R9, "fd_match"),
+		asm.Return(),
+
+		// Store TGID (r7 >> 32) into result[0]
+		asm.Mov.Reg(asm.R6, asm.R7).WithSymbol("fd_match"),
+		asm.RSh.Imm(asm.R6, 32),
+		asm.Mov.Imm(asm.R3, 0), asm.StoreMem(asm.RFP, -4, asm.R3, asm.Word),
+		asm.LoadMapPtr(asm.R1, result.FD()),
+		asm.Mov.Reg(asm.R2, asm.RFP), asm.Add.Imm(asm.R2, -4),
+		asm.FnMapLookupElem.Call(),
+		asm.JNE.Imm(asm.R0, 0, "store"),
+		asm.Return(),
+		asm.StoreMem(asm.R0, 0, asm.R6, asm.DWord).WithSymbol("store"),
+		asm.Mov.Imm(asm.R0, 0),
+		asm.Return(),
+	}
+
+	prog, err := cebpf.NewProgram(&cebpf.ProgramSpec{
+		Type: cebpf.TracePoint, License: "GPL", Instructions: insns,
+	})
+	if err != nil {
+		log.Debugf("globalPID: failed to load bootstrap program: %v", err)
+		return uint32(os.Getpid())
+	}
+	defer prog.Close()
+
+	lnk, err := link.Tracepoint("syscalls", "sys_enter_bpf", prog, nil)
+	if err != nil {
+		log.Debugf("globalPID: failed to attach bootstrap program: %v", err)
+		return uint32(os.Getpid())
+	}
+
+	// This BPF map lookup triggers sys_enter_bpf with our unique marker FD.
+	var dummy uint64
+	key0 := uint32(0)
+	_ = marker.Lookup(unsafe.Pointer(&key0), unsafe.Pointer(&dummy))
+	_ = lnk.Close()
+
+	var tgid uint64
+	if err := result.Lookup(unsafe.Pointer(&key0), unsafe.Pointer(&tgid)); err != nil || tgid == 0 {
+		return uint32(os.Getpid())
+	}
+	return uint32(tgid)
+}
+
 // executeSystemAnalysisBpfCode will execute given analysis program with the address argument.
 func executeSystemAnalysisBpfCode(progSpec *cebpf.ProgramSpec, maps map[string]*cebpf.Map,
 	address libpf.SymbolValue,
@@ -124,7 +233,7 @@ func executeSystemAnalysisBpfCode(progSpec *cebpf.ProgramSpec, maps map[string]*
 
 	key0 := uint32(0)
 	data := support.SystemAnalysis{
-		Pid:     uint32(os.Getpid()),
+		Pid:     globalPID(),
 		Address: uint64(address),
 	}
 
