@@ -199,6 +199,8 @@ type Config struct {
 	OBIProcessCtx bool
 	// OOMTracing enables collection of OOM kill stack traces.
 	OOMTracing bool
+	// SignalTracing enables collection of crash stack traces for SIGABRT, SIGBUS, and SIGSEGV.
+	SignalTracing bool
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -459,7 +461,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		return nil, nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe || cfg.OOMTracing {
+	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe || cfg.OOMTracing || cfg.SignalTracing {
 		// Load the tail call destinations if any kind of event profiling is enabled.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
@@ -516,6 +518,20 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], oomProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to load OOM eBPF programs: %v", err)
+		}
+	}
+
+	if cfg.SignalTracing {
+		sigProgs := []progLoaderHelper{
+			{
+				name:             "tracepoint__signal_deliver",
+				noTailCallTarget: true,
+				enable:           true,
+			},
+		}
+		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], sigProgs,
+			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to load signal eBPF programs: %v", err)
 		}
 	}
 
@@ -1072,6 +1088,7 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 	case support.TraceOriginOffCPU:
 	case support.TraceOriginProbe:
 	case support.TraceOriginOOM:
+	case support.TraceOriginSignal:
 	default:
 		return nil, fmt.Errorf("origin %d: %w", trace.Origin, errOriginUnexpected)
 	}
@@ -1365,6 +1382,21 @@ func (t *Tracer) StartOOMTracing() error {
 	}
 	t.hooks[hookPoint{group: "kprobe", name: "get_signal"}] = sigLink
 
+	return nil
+}
+
+// StartSignalTracing starts crash signal tracing by attaching the signal_deliver
+// tracepoint. It captures stack traces for SIGABRT, SIGBUS, and SIGSEGV.
+func (t *Tracer) StartSignalTracing() error {
+	sigProg, ok := t.ebpfProgs["tracepoint__signal_deliver"]
+	if !ok {
+		return errors.New("signal program tracepoint__signal_deliver is not available")
+	}
+	sigLink, err := link.Tracepoint("signal", "signal_deliver", sigProg, nil)
+	if err != nil {
+		return fmt.Errorf("failed to attach tracepoint signal/signal_deliver: %v", err)
+	}
+	t.hooks[hookPoint{group: "signal", name: "signal_deliver"}] = sigLink
 	return nil
 }
 

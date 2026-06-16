@@ -103,6 +103,7 @@ const (
 	TraceOriginOffCPU   = C.TRACE_OFF_CPU
 	TraceOriginProbe    = C.TRACE_PROBE
 	TraceOriginOOM      = C.TRACE_OOM
+	TraceOriginSignal   = C.TRACE_SIGNAL
 )
 
 type ApmSpanID C.ApmSpanID
