@@ -372,6 +372,7 @@ typedef enum TraceOrigin {
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
   TRACE_PROBE,
+  TRACE_OOM,
 } TraceOrigin;
 
 // Maximum number of unique stack deltas needed on a system. This is based on

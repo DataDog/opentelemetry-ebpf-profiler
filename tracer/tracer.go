@@ -197,6 +197,8 @@ type Config struct {
 	BPFFSRoot string
 	// OBIProcessCtx enable the use of a known shared eBPF map with OBI.
 	OBIProcessCtx bool
+	// OOMTracing enables collection of OOM kill stack traces.
+	OOMTracing bool
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -457,7 +459,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		return nil, nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe {
+	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe || cfg.OOMTracing {
 		// Load the tail call destinations if any kind of event profiling is enabled.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
@@ -495,6 +497,25 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], probeProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to load uprobe eBPF programs: %v", err)
+		}
+	}
+
+	if cfg.OOMTracing {
+		oomProgs := []progLoaderHelper{
+			{
+				name:             "kprobe__get_signal",
+				noTailCallTarget: true,
+				enable:           true,
+			},
+			{
+				name:             "tracepoint__oom_mark_victim",
+				noTailCallTarget: true,
+				enable:           true,
+			},
+		}
+		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], oomProgs,
+			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to load OOM eBPF programs: %v", err)
 		}
 	}
 
@@ -1050,6 +1071,7 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 	case support.TraceOriginSampling:
 	case support.TraceOriginOffCPU:
 	case support.TraceOriginProbe:
+	case support.TraceOriginOOM:
 	default:
 		return nil, fmt.Errorf("origin %d: %w", trace.Origin, errOriginUnexpected)
 	}
@@ -1317,6 +1339,31 @@ func (t *Tracer) StartOffCPUProfiling() error {
 		return nil
 	}
 	t.hooks[hookPoint{group: "sched", name: "sched_switch"}] = tpLink
+
+	return nil
+}
+
+// StartOOMTracing starts OOM kill tracing by attaching the programs to the hooks.
+func (t *Tracer) StartOOMTracing() error {
+	markProg, ok := t.ebpfProgs["tracepoint__oom_mark_victim"]
+	if !ok {
+		return errors.New("OOM program tracepoint__oom_mark_victim is not available")
+	}
+	markLink, err := link.Tracepoint("oom", "mark_victim", markProg, nil)
+	if err != nil {
+		return fmt.Errorf("failed to attach tracepoint oom/mark_victim: %v", err)
+	}
+	t.hooks[hookPoint{group: "oom", name: "mark_victim"}] = markLink
+
+	sigProg, ok := t.ebpfProgs["kprobe__get_signal"]
+	if !ok {
+		return errors.New("OOM program kprobe__get_signal is not available")
+	}
+	sigLink, err := link.Kprobe("get_signal", sigProg, nil)
+	if err != nil {
+		return fmt.Errorf("failed to attach kprobe to get_signal: %v", err)
+	}
+	t.hooks[hookPoint{group: "kprobe", name: "get_signal"}] = sigLink
 
 	return nil
 }
