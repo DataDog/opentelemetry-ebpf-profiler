@@ -524,7 +524,12 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 	if cfg.SignalTracing {
 		sigProgs := []progLoaderHelper{
 			{
-				name:             "tracepoint__signal_deliver",
+				name:             "tracepoint__signal_generate",
+				noTailCallTarget: true,
+				enable:           true,
+			},
+			{
+				name:             "kprobe__signal_deliver",
 				noTailCallTarget: true,
 				enable:           true,
 			},
@@ -1385,18 +1390,30 @@ func (t *Tracer) StartOOMTracing() error {
 	return nil
 }
 
-// StartSignalTracing starts crash signal tracing by attaching the signal_deliver
-// tracepoint. It captures stack traces for SIGABRT, SIGBUS, and SIGSEGV.
+// StartSignalTracing starts crash signal tracing using a two-phase approach
+// mirroring OOM tracing. tracepoint/signal/signal_generate marks the victim PID
+// when a crash signal is queued; kprobe/get_signal (same hook as OOM, different
+// program) then captures the stack trace in the victim's execution context.
 func (t *Tracer) StartSignalTracing() error {
-	sigProg, ok := t.ebpfProgs["tracepoint__signal_deliver"]
+	genProg, ok := t.ebpfProgs["tracepoint__signal_generate"]
 	if !ok {
-		return errors.New("signal program tracepoint__signal_deliver is not available")
+		return errors.New("signal program tracepoint__signal_generate is not available")
 	}
-	sigLink, err := link.Tracepoint("signal", "signal_deliver", sigProg, nil)
+	genLink, err := link.Tracepoint("signal", "signal_generate", genProg, nil)
 	if err != nil {
-		return fmt.Errorf("failed to attach tracepoint signal/signal_deliver: %v", err)
+		return fmt.Errorf("failed to attach tracepoint signal/signal_generate: %v", err)
 	}
-	t.hooks[hookPoint{group: "signal", name: "signal_deliver"}] = sigLink
+	t.hooks[hookPoint{group: "signal", name: "signal_generate"}] = genLink
+
+	kprobeProg, ok := t.ebpfProgs["kprobe__signal_deliver"]
+	if !ok {
+		return errors.New("signal program kprobe__signal_deliver is not available")
+	}
+	sigLink, err := link.Kprobe("get_signal", kprobeProg, nil)
+	if err != nil {
+		return fmt.Errorf("failed to attach kprobe to get_signal for signal tracing: %v", err)
+	}
+	t.hooks[hookPoint{group: "kprobe", name: "get_signal_signal"}] = sigLink
 	return nil
 }
 
