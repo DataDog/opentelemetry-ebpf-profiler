@@ -503,7 +503,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 	if cfg.OOMTracing {
 		oomProgs := []progLoaderHelper{
 			{
-				name:             "kprobe__get_signal",
+				name:             "kprobe__do_exit",
 				noTailCallTarget: true,
 				enable:           true,
 			},
@@ -1355,15 +1355,15 @@ func (t *Tracer) StartOOMTracing() error {
 	}
 	t.hooks[hookPoint{group: "oom", name: "mark_victim"}] = markLink
 
-	sigProg, ok := t.ebpfProgs["kprobe__get_signal"]
+	exitProg, ok := t.ebpfProgs["kprobe__do_exit"]
 	if !ok {
-		return errors.New("OOM program kprobe__get_signal is not available")
+		return errors.New("OOM program kprobe__do_exit is not available")
 	}
-	sigLink, err := link.Kprobe("get_signal", sigProg, nil)
+	exitLink, err := link.Kprobe("do_exit", exitProg, nil)
 	if err != nil {
-		return fmt.Errorf("failed to attach kprobe to get_signal: %v", err)
+		return fmt.Errorf("failed to attach kprobe to do_exit: %v", err)
 	}
-	t.hooks[hookPoint{group: "kprobe", name: "get_signal"}] = sigLink
+	t.hooks[hookPoint{group: "kprobe", name: "do_exit"}] = exitLink
 
 	return nil
 }

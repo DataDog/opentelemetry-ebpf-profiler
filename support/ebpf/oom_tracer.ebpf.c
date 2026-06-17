@@ -8,7 +8,7 @@ typedef struct {
 } oom_victim_t;
 
 // oom_victims maps victim pid -> context for the window between mark_victim
-// and get_signal. LRU handles stale entries if get_signal never fires.
+// and do_exit. LRU handles stale entries if do_exit never fires.
 struct {
   __uint(type, BPF_MAP_TYPE_LRU_HASH);
   __type(key, u32);
@@ -23,7 +23,7 @@ typedef struct {
 } mark_victim_ctx;
 
 // tracepoint__oom_mark_victim fires when the OOM killer selects a victim.
-// Records the victim PID so kprobe__get_signal can filter for it.
+// Records the victim PID so kprobe__do_exit can filter for it.
 SEC("tracepoint/oom/mark_victim")
 int tracepoint__oom_mark_victim(mark_victim_ctx *ctx)
 {
@@ -36,11 +36,10 @@ int tracepoint__oom_mark_victim(mark_victim_ctx *ctx)
   return 0;
 }
 
-// kprobe__get_signal fires when a process dequeues a pending signal, in the
-// victim's own execution context. If the PID is in oom_victims it's receiving
-// its OOM SIGKILL — collect the stack trace.
-SEC("kprobe/get_signal")
-int kprobe__get_signal(struct pt_regs *ctx)
+// kprobe__do_exit fires in the victim's context at do_exit entry, before
+// exit_mm(), so the userspace stack is still readable.
+SEC("kprobe/do_exit")
+int kprobe__do_exit(struct pt_regs *ctx)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
@@ -50,9 +49,6 @@ int kprobe__get_signal(struct pt_regs *ctx)
     return 0;
   }
 
-  // Only capture on the main thread (TID == PID). In Go+Python mixed
-  // processes the Go runtime creates extra OS threads; the main Python
-  // thread is the one executing user code and has TID == PID.
   if (tid != pid) {
     return 0;
   }
