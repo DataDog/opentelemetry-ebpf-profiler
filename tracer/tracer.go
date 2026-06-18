@@ -197,8 +197,8 @@ type Config struct {
 	BPFFSRoot string
 	// OBIProcessCtx enable the use of a known shared eBPF map with OBI.
 	OBIProcessCtx bool
-	// OOMTracing enables collection of OOM kill stack traces.
-	OOMTracing bool
+	// CrashTracing enables collection of crash stack traces (OOM kills and fatal signals).
+	CrashTracing bool
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -459,7 +459,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		return nil, nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe || cfg.OOMTracing {
+	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe || cfg.CrashTracing {
 		// Load the tail call destinations if any kind of event profiling is enabled.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
@@ -500,10 +500,15 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		}
 	}
 
-	if cfg.OOMTracing {
-		oomProgs := []progLoaderHelper{
+	if cfg.CrashTracing {
+		crashProgs := []progLoaderHelper{
 			{
 				name:             "kprobe__do_exit",
+				noTailCallTarget: true,
+				enable:           true,
+			},
+			{
+				name:             "kprobe__do_coredump",
 				noTailCallTarget: true,
 				enable:           true,
 			},
@@ -513,9 +518,9 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 				enable:           true,
 			},
 		}
-		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], oomProgs,
+		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], crashProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to load OOM eBPF programs: %v", err)
+			return nil, nil, nil, fmt.Errorf("failed to load crash eBPF programs: %v", err)
 		}
 	}
 
@@ -1071,7 +1076,7 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 	case support.TraceOriginSampling:
 	case support.TraceOriginOffCPU:
 	case support.TraceOriginProbe:
-	case support.TraceOriginOOM:
+	case support.TraceOriginCrash:
 	default:
 		return nil, fmt.Errorf("origin %d: %w", trace.Origin, errOriginUnexpected)
 	}
@@ -1343,11 +1348,12 @@ func (t *Tracer) StartOffCPUProfiling() error {
 	return nil
 }
 
-// StartOOMTracing starts OOM kill tracing by attaching the programs to the hooks.
-func (t *Tracer) StartOOMTracing() error {
+// StartCrashTracing attaches all crash-tracing hooks: OOM kills (mark_victim +
+// do_exit) and fatal signal crashes (do_coredump).
+func (t *Tracer) StartCrashTracing() error {
 	markProg, ok := t.ebpfProgs["tracepoint__oom_mark_victim"]
 	if !ok {
-		return errors.New("OOM program tracepoint__oom_mark_victim is not available")
+		return errors.New("crash program tracepoint__oom_mark_victim is not available")
 	}
 	markLink, err := link.Tracepoint("oom", "mark_victim", markProg, nil)
 	if err != nil {
@@ -1357,13 +1363,23 @@ func (t *Tracer) StartOOMTracing() error {
 
 	exitProg, ok := t.ebpfProgs["kprobe__do_exit"]
 	if !ok {
-		return errors.New("OOM program kprobe__do_exit is not available")
+		return errors.New("crash program kprobe__do_exit is not available")
 	}
 	exitLink, err := link.Kprobe("do_exit", exitProg, nil)
 	if err != nil {
 		return fmt.Errorf("failed to attach kprobe to do_exit: %v", err)
 	}
 	t.hooks[hookPoint{group: "kprobe", name: "do_exit"}] = exitLink
+
+	coredumpProg, ok := t.ebpfProgs["kprobe__do_coredump"]
+	if !ok {
+		return errors.New("crash program kprobe__do_coredump is not available")
+	}
+	coredumpLink, err := link.Kprobe("do_coredump", coredumpProg, nil)
+	if err != nil {
+		return fmt.Errorf("failed to attach kprobe to do_coredump: %v", err)
+	}
+	t.hooks[hookPoint{group: "kprobe", name: "do_coredump"}] = coredumpLink
 
 	return nil
 }

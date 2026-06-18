@@ -93,7 +93,7 @@ const (
 	TraceOriginSampling = 0x1
 	TraceOriginOffCPU   = 0x2
 	TraceOriginProbe    = 0x3
-	TraceOriginOOM      = 0x4
+	TraceOriginCrash    = 0x4
 )
 
 type ApmSpanID [8]byte
