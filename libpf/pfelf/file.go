@@ -674,6 +674,8 @@ const (
 	RelDTPMOD64
 	// RelDTOFF64 matches DTPOFF64 relocations (R_AARCH64_TLS_DTPREL64, R_X86_64_DTPOFF64).
 	RelDTOFF64
+	// RelTPOFF64 matches TPOFF64 relocations (R_AARCH64_TLS_TPREL64, R_X86_64_TPOFF64).
+	RelTPOFF64
 )
 
 // classifyRelocAarch64 returns the RelocType for an AARCH64 relocation.
@@ -685,6 +687,8 @@ func classifyRelocAarch64(rela ElfReloc) RelocType {
 		return RelDTPMOD64
 	case elf.R_AARCH64_TLS_DTPREL64:
 		return RelDTOFF64
+	case elf.R_AARCH64_TLS_TPREL64:
+		return RelTPOFF64
 	default:
 		return 0
 	}
@@ -699,6 +703,19 @@ func classifyRelocX86_64(rela ElfReloc) RelocType {
 		return RelDTPMOD64
 	case elf.R_X86_64_DTPOFF64:
 		return RelDTOFF64
+	case elf.R_X86_64_TPOFF64:
+		return RelTPOFF64
+	default:
+		return 0
+	}
+}
+
+func ClassifyReloc(machine elf.Machine, rela ElfReloc) RelocType {
+	switch machine {
+	case elf.EM_AARCH64:
+		return classifyRelocAarch64(rela)
+	case elf.EM_X86_64:
+		return classifyRelocX86_64(rela)
 	default:
 		return 0
 	}

@@ -17,6 +17,9 @@
 
 // The TLS variable that the threadcontext interpreter looks up.
 // In a shared library, this will use the global-dynamic TLS model.
+#ifdef FORCE_TLS_MODEL_INITIAL_EXEC
+__attribute__((tls_model("initial-exec")))
+#endif
 __thread otel_thread_ctx_v1_t *otel_thread_ctx_v1;
 
 int init_process_context(void) {

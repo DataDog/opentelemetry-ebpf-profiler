@@ -95,6 +95,8 @@ func Test_ProcessContext(t *testing.T) {
 		"musl_lib":     {exeName: "processctx_lib_musl"},
 		"glibc_dlopen": {exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc.so")}},
 		"musl_dlopen":  {exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl.so")}},
+		"glibc_lib_ie": {exeName: "processctx_lib_glibc_ie"},
+		"musl_lib_ie":  {exeName: "processctx_lib_musl_ie"},
 	}
 	if runtime.GOARCH == "x86_64" {
 		tests["glibc_lib_gnu"] = testCase{exeName: "processctx_lib_glibc_gnu"}

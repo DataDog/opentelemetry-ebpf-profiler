@@ -109,33 +109,38 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	if tlsDescElfAddr == 0 {
 		// No TLS descriptor found, 2 possible reasons:
 		// 1. TLS dialect is not TLS desc
-		// 2. No relocation found because local/initial exec TLS model (executable) or local dynamic TLS model
+		// 2. No relocation found because local exec TLS model
+		// 3. No tlsdesc relocation found because initial exec TLS model
 
-		// For now only support executable TLS model.
-		if !isExecutable(ef) {
-			if ef.Machine == elf.EM_AARCH64 {
+		isInitialExec := false
+
+		// Look for other types of relocations:
+		// - DTPMOD64 and DTPOFF64: module ID and TLS offset relative to the module (general dynamic TLS model with GNU TLS dialect).
+		// - R_AARCH64_TLS_TPREL64 / R_X86_64_TPOFF64: TLS offset relative to the thread pointer (initial exec TLS model).
+		if err = ef.VisitRelocations(func(r pfelf.ElfReloc, symname string) bool {
+			if symname == tlsExport {
+				relocType := pfelf.ClassifyReloc(ef.Machine, r)
+				if relocType == pfelf.RelDTOFF64 && r.Addend == 0 {
+					tlsOffElfAddr = libpf.Address(r.Off)
+				} else if relocType == pfelf.RelDTPMOD64 {
+					tlsModElfAddr = libpf.Address(r.Off)
+				} else if relocType == pfelf.RelTPOFF64 {
+					tlsOffElfAddr = libpf.Address(r.Off)
+					isInitialExec = true
+					return false
+				}
+				return tlsOffElfAddr == 0 || tlsModElfAddr == 0
+			}
+			return true
+		}, pfelf.RelDTOFF64|pfelf.RelDTPMOD64|pfelf.RelTPOFF64); err != nil {
+			return nil, fmt.Errorf("failed to visit relocations: %v", err)
+		}
+
+		if (tlsOffElfAddr == 0 || tlsModElfAddr == 0) && !isInitialExec {
+			if !isExecutable(ef) {
 				return nil, errors.New("unsupported TLS model")
 			}
-			if err = ef.VisitRelocations(func(r pfelf.ElfReloc, symname string) bool {
-				if symname == tlsExport {
-					relocType := elf.R_X86_64(r.Info & 0xffff)
-					if relocType == elf.R_X86_64_DTPOFF64 && r.Addend == 0 {
-						tlsOffElfAddr = libpf.Address(r.Off)
-
-					} else if relocType == elf.R_X86_64_DTPMOD64 {
-						tlsModElfAddr = libpf.Address(r.Off)
-					}
-					return tlsOffElfAddr == 0 || tlsModElfAddr == 0
-				}
-				return true
-			}, pfelf.RelDTOFF64|pfelf.RelDTPMOD64); err != nil {
-				return nil, fmt.Errorf("failed to visit relocations: %v", err)
-			}
-
-			if tlsOffElfAddr == 0 || tlsModElfAddr == 0 {
-				return nil, errors.New("failed to locate TLS offset or module ID relocations")
-			}
-		} else {
+			// Assume local exec TLS model
 			tlsOffset, err = getStaticTLSOffset(ef, threadStorageSym)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get static TLS offset: %v", err)
@@ -200,8 +205,12 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	bias libpf.Address, rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {
 	var tlsOffset uint64
-	if d.tlsOffset != 0 {
-		tlsOffset = d.tlsOffset
+	if d.tlsOffset != 0 || (d.tlsModElfAddr == 0 && d.tlsOffElfAddr != 0) {
+		if d.tlsOffset != 0 {
+			tlsOffset = d.tlsOffset
+		} else {
+			tlsOffset = rm.Uint64(bias + d.tlsOffElfAddr)
+		}
 	} else {
 		var moduleID uint64
 		if d.tlsModElfAddr != 0 {
