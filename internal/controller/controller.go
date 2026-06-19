@@ -111,6 +111,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		ExecutableReporter:     c.config.ExecutableReporter,
 		BPFFSRoot:              c.config.BPFFSRoot,
 		OBIProcessCtx:          c.config.OBIProcessCtx,
+		CrashTracing:           c.config.CrashTracing,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load eBPF tracer: %w", err)
@@ -161,6 +162,13 @@ func (c *Controller) Start(ctx context.Context) error {
 	// This log line is used in our system tests to verify if that the agent has started.
 	// So if you change this log line update also the system test.
 	log.Info("Attached sched monitor")
+
+	if c.config.CrashTracing {
+		if err := trc.StartCrashTracing(); err != nil {
+			return fmt.Errorf("failed to start crash tracing: %w", err)
+		}
+		log.Info("Enabled crash tracing")
+	}
 
 	if err := c.startTraceHandling(ctx, trc); err != nil {
 		return fmt.Errorf("failed to start trace handling: %w", err)
