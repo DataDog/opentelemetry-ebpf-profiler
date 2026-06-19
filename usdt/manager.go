@@ -4,6 +4,8 @@
 package usdt // import "go.opentelemetry.io/ebpf-profiler/usdt"
 
 import (
+	"fmt"
+
 	cebpf "github.com/cilium/ebpf"
 	lru "github.com/elastic/go-freelru"
 
@@ -12,45 +14,64 @@ import (
 
 // parseCacheSize bounds the number of distinct backing files for which we
 // keep cached `.note.stapsdt` parse results. One entry per binary/library
-// the profiler has ever scanned.
-const parseCacheSize = 4096
+// the profiler has ever scanned. Matched to elfInfoCacheSize in
+// processmanager so the two caches age at similar rates.
+const parseCacheSize = 16384
 
 // Manager holds process-independent state for USDT attachment: BPF program
-// handles, kernel capability flags, and a parse cache keyed by file identity.
+// handles and a parse cache keyed by file identity.
 //
-// One Manager per profiler instance; lookup-only from many goroutines.
+// One Manager per profiler instance. The parse cache is concurrency-safe;
+// the rest of the Manager is read-only after construction.
+//
+// RefCtrOffset PMU support is required (Linux 4.20+) and the profiler's
+// minimum kernel is 5.10, so we always pass the semaphore offset through
+// without a capability check.
 type Manager struct {
 	// progs holds the BPF program to attach for each ProbeKind. Loaded by
 	// the tracer alongside the rest of the collection spec.
 	progs map[ProbeKind]*cebpf.Program
 
-	// supportsRefCtr indicates whether the kernel/PMU supports
-	// UprobeOptions.RefCtrOffset (i.e. semaphore management). When false we
-	// still attach, but skip the semaphore so semaphored probes won't fire.
-	supportsRefCtr bool
-
 	// parseCache deduplicates `.note.stapsdt` parsing across processes that
-	// share the same backing file.
-	parseCache *lru.LRU[util.OnDiskFileIdentifier, []parsedProbe]
+	// share the same backing file. Empty results are cached too so that
+	// probe-less binaries are not re-parsed on every Reconcile.
+	parseCache *lru.SyncedLRU[util.OnDiskFileIdentifier, []parsedProbe]
 }
 
-// NewManager constructs a Manager. progs must contain one entry per ProbeKind
-// the caller wants attached; kinds without a program are silently skipped at
-// reconcile time.
+// NewManager constructs a Manager. progs must contain one non-nil entry per
+// ProbeKind the caller wants attached; kinds without a program will be
+// skipped at reconcile time.
 //
-// Returns (nil, nil) if progs is empty, to make USDT support trivially
-// disable-able from the tracer wiring without scattering nil checks.
+// Returns (nil, nil) if progs is empty, so the tracer wiring can disable
+// USDT support by simply passing an empty map.
 func NewManager(progs map[ProbeKind]*cebpf.Program) (*Manager, error) {
-	// TODO: short-circuit on empty progs
-	// TODO: detect RefCtrOffset PMU support (cilium does this internally via
-	//       haveRefCtrOffsetPMU; we may need our own probe since it's unexported)
-	// TODO: init parseCache
-	return nil, nil
+	if len(progs) == 0 {
+		return nil, nil
+	}
+	for kind, prog := range progs {
+		if prog == nil {
+			return nil, fmt.Errorf("usdt: nil BPF program for probe kind %d", kind)
+		}
+	}
+
+	parseCache, err := lru.NewSynced[util.OnDiskFileIdentifier, []parsedProbe](
+		parseCacheSize, util.OnDiskFileIdentifier.Hash32)
+	if err != nil {
+		return nil, fmt.Errorf("usdt: build parse cache: %w", err)
+	}
+
+	return &Manager{
+		progs:      progs,
+		parseCache: parseCache,
+	}, nil
 }
 
 // Close releases manager-owned resources. Per-PID links are owned by the
 // Instances and closed via Instance.Detach.
 func (m *Manager) Close() error {
-	// TODO: drop parse cache; programs are owned by the tracer collection
+	if m == nil {
+		return nil
+	}
+	m.parseCache.Purge()
 	return nil
 }

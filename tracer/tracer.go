@@ -41,6 +41,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
+	"go.opentelemetry.io/ebpf-profiler/usdt"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -193,6 +194,9 @@ type Config struct {
 	// LoadProbe indicates whether the generic eBPF program should be loaded
 	// without being attached to something.
 	LoadProbe bool
+	// HeapProfiling enables loading of the heap USDT uprobe entry programs
+	// and per-process attach via the usdt package.
+	HeapProfiling bool
 	// BPFFSRoot is the root path to BPF filesystem for pinned maps and programs.
 	BPFFSRoot string
 	// OBIProcessCtx enable the use of a known shared eBPF map with OBI.
@@ -263,12 +267,28 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		return nil, fmt.Errorf("failed to load eBPF maps: %v", err)
 	}
 
-	// TODO: construct usdt.Manager here once heap USDT programs are loaded
-	// from the collection spec, and pass it in instead of nil.
+	if cfg.LiveHeapMaxEntriesPerPID > 0 {
+		ebpfHandler.SetHeapPIDAllocLimit(uint32(cfg.LiveHeapMaxEntriesPerPID))
+	}
+
+	var usdtMgr *usdt.Manager
+	if cfg.HeapProfiling {
+		usdtProgs := map[usdt.ProbeKind]*cebpf.Program{}
+		if p, ok := ebpfProgs["uprobe_heap_alloc"]; ok {
+			usdtProgs[usdt.ProbeHeapAlloc] = p
+		}
+		if p, ok := ebpfProgs["uprobe_heap_free"]; ok {
+			usdtProgs[usdt.ProbeHeapFree] = p
+		}
+		if usdtMgr, err = usdt.NewManager(usdtProgs); err != nil {
+			return nil, fmt.Errorf("failed to build USDT manager: %w", err)
+		}
+	}
+
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		cfg.Intervals.ExecutableUnloadDelay(), ebpfHandler, cfg.TraceReporter, cfg.ExecutableReporter,
 		elfunwindinfo.NewStackDeltaProvider(),
-		cfg.FilterErrorFrames, cfg.IncludeEnvVars, nil)
+		cfg.FilterErrorFrames, cfg.IncludeEnvVars, usdtMgr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}
@@ -459,8 +479,10 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		return nil, nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe {
+	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe || cfg.HeapProfiling {
 		// Load the tail call destinations if any kind of event profiling is enabled.
+		// Heap profiling needs the uprobe unwinder chain (kprobe_progs) so its
+		// USDT entry programs can tail-call into PROG_UNWIND_NATIVE.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
@@ -497,6 +519,20 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], probeProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to load uprobe eBPF programs: %v", err)
+		}
+	}
+
+	if cfg.HeapProfiling {
+		// USDT entry points for heap profiling. Attached PID-scoped from
+		// userspace by the usdt package; they themselves tail-call into
+		// the shared uprobe unwinder chain loaded above.
+		heapProgs := []progLoaderHelper{
+			{name: "uprobe_heap_alloc", noTailCallTarget: true, enable: true},
+			{name: "uprobe_heap_free", noTailCallTarget: true, enable: true},
+		}
+		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], heapProgs,
+			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to load heap USDT eBPF programs: %v", err)
 		}
 	}
 

@@ -4,12 +4,13 @@
 package usdt // import "go.opentelemetry.io/ebpf-profiler/usdt"
 
 import (
+	"errors"
+	"fmt"
+
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
-
-// noopMapping silences "imported and not used" while Reconcile is stubbed.
-var _ = (*process.RawMapping)(nil)
 
 // Instance holds the set of live USDT attachments for one PID.
 //
@@ -23,6 +24,17 @@ type Instance struct {
 	// this pid. Keyed for O(1) diff against the desired set computed from
 	// current mappings.
 	attached map[ProbeKey]AttachedProbe
+}
+
+// desiredEntry pairs a parsed probe with the minimal mapping coordinates
+// needed to (a) attach the uprobe and (b) build the /proc/<pid>/map_files
+// path. We don't retain the full RawMapping because its Path field may
+// point into a scanner buffer that gets recycled after IterateMappings'
+// callback returns.
+type desiredEntry struct {
+	vaddr  uint64
+	length uint64
+	probe  parsedProbe
 }
 
 // Reconcile diffs the set of USDT probes desired for `pid` (derived by
@@ -42,28 +54,119 @@ func (m *Manager) Reconcile(
 	pr process.Process,
 	inst *Instance,
 ) (*Instance, error) {
-	// TODO: if inst == nil, allocate a fresh Instance with empty map.
-	// TODO: build desired set by iterating pr.IterateMappings, keeping only
-	//       executable file-backed mappings, and calling m.scanMapping per
-	//       mapping (results cached by fileID, so repeats are cheap):
-	//         for each parsed probe:
-	//           desired[ProbeKey{pid, fileID, kind, location}] = (mapping, probe)
-	// TODO: attach diff:
-	//         for key in desired \ inst.attached:
-	//           link, err := m.attach(pid, pr, mapping, probe)
-	//           on success: inst.attached[key] = AttachedProbe{key, link}
-	//           on error:   log and continue (partial success is fine)
-	// TODO: detach diff:
-	//         for key in inst.attached \ desired:
-	//           close link; delete from map
-	// TODO: return (inst, joined errors)
-	return inst, nil
+	if inst == nil {
+		inst = &Instance{pid: pid, attached: make(map[ProbeKey]AttachedProbe)}
+	}
+
+	// Build the desired set by scanning every executable file-backed
+	// mapping. We process inline in the callback so that RawMapping.Path
+	// and similar buffer-backed fields don't escape their lifetime — even
+	// though scanMapping doesn't currently need Path, this keeps the
+	// invariant tight.
+	desired := make(map[ProbeKey]desiredEntry)
+	var scanErrs []error
+	_, iterErr := pr.IterateMappings(func(rm process.RawMapping) bool {
+		if !rm.IsExecutable() || rm.IsAnonymous() {
+			return true
+		}
+		probes, err := m.scanMapping(pr, &rm)
+		if err != nil {
+			scanErrs = append(scanErrs,
+				fmt.Errorf("scan mapping %#x-%#x: %w",
+					rm.Vaddr, rm.Vaddr+rm.Length, err))
+			return true
+		}
+		if len(probes) == 0 {
+			return true
+		}
+		fileID := rm.GetOnDiskFileIdentifier()
+		for _, p := range probes {
+			key := ProbeKey{
+				PID:    pid,
+				FileID: fileID,
+				Kind:   p.Kind,
+				Offset: p.Location,
+			}
+			desired[key] = desiredEntry{
+				vaddr:  rm.Vaddr,
+				length: rm.Length,
+				probe:  p,
+			}
+		}
+		return true
+	})
+	if iterErr != nil && !errors.Is(iterErr, process.ErrCallbackStopped) {
+		// Mapping iteration failed before we built the full desired set.
+		// Don't detach anything based on a partial view; just report.
+		scanErrs = append(scanErrs, fmt.Errorf("iterate mappings: %w", iterErr))
+		return inst, errors.Join(scanErrs...)
+	}
+
+	// Detach first: bounds peak live link count and lets a replaced
+	// library re-attach to its new inode without colliding.
+	var detachErrs []error
+	numDetached := 0
+	for key, ap := range inst.attached {
+		if _, keep := desired[key]; keep {
+			continue
+		}
+		if err := ap.Link.Close(); err != nil {
+			detachErrs = append(detachErrs,
+				fmt.Errorf("detach %v: %w", key, err))
+		}
+		delete(inst.attached, key)
+		numDetached++
+	}
+
+	// Attach newly-desired probes. Per-probe failures are accumulated and
+	// returned but do not abort the loop — partial success is the design.
+	var attachErrs []error
+	numAttached := 0
+	for key, de := range desired {
+		if _, already := inst.attached[key]; already {
+			continue
+		}
+		mapping := &process.RawMapping{
+			Vaddr:  de.vaddr,
+			Length: de.length,
+		}
+		lnk, err := m.attach(pid, mapping, de.probe)
+		if err != nil {
+			if errors.Is(err, errProgramNotLoaded) {
+				// Kind has no registered program; not an error worth
+				// surfacing on every reconcile. Skip quietly.
+				continue
+			}
+			attachErrs = append(attachErrs,
+				fmt.Errorf("attach %v: %w", key, err))
+			continue
+		}
+		inst.attached[key] = AttachedProbe{Key: key, Link: lnk}
+		numAttached++
+	}
+
+	if numAttached > 0 || numDetached > 0 {
+		log.Debugf("USDT pid=%d live=%d (+%d,-%d)",
+			pid, len(inst.attached), numAttached, numDetached)
+	}
+
+	allErrs := append(append(scanErrs, detachErrs...), attachErrs...)
+	return inst, errors.Join(allErrs...)
 }
 
 // Detach closes every live attachment for this pid. Called from
-// ProcessManager.processPIDExit.
+// ProcessManager.processPIDExit (via a goroutine, so it runs without
+// pm.mu held).
 func (inst *Instance) Detach() error {
-	// TODO: iterate inst.attached, close each link.Link, join errors
-	// TODO: clear map so a stale Instance reference can't double-close
-	return nil
+	if inst == nil {
+		return nil
+	}
+	var errs []error
+	for key, ap := range inst.attached {
+		if err := ap.Link.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close %v: %w", key, err))
+		}
+		delete(inst.attached, key)
+	}
+	return errors.Join(errs...)
 }

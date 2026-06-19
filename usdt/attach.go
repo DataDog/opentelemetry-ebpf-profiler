@@ -4,52 +4,58 @@
 package usdt // import "go.opentelemetry.io/ebpf-profiler/usdt"
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/cilium/ebpf/link"
 
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
 
+// errProgramNotLoaded is returned by attach when no BPF program has been
+// registered for the parsed probe's Kind. Reconcile treats this as a soft
+// per-probe failure and continues with the rest.
+var errProgramNotLoaded = errors.New("usdt: no BPF program registered for probe kind")
+
 // attach creates one PID-scoped uprobe link for a single parsed probe.
 //
-// The kernel attaches uprobes by (inode, file_offset), so we pass the
-// per-process mapping's backing file path. Using /proc/<pid>/map_files/...
-// (via pr.OpenMappingFile) gives us a path that resolves to the exact inode
-// the target process has mapped, regardless of mount namespace or whether
-// the file has been deleted on disk.
-//
-// Returns an error if the BPF program for this ProbeKind is not loaded
-// (heap profiling disabled for this kind), or if the kernel rejects the
-// uprobe attach.
+// The kernel attaches uprobes by (inode, file_offset). We open the file via
+// /proc/<pid>/map_files/<start>-<end>, which is a kernel-provided symlink
+// resolving to exactly the inode the target process has mapped, regardless
+// of mount namespace or whether the file has been replaced/deleted on disk.
 func (m *Manager) attach(
 	pid libpf.PID,
-	pr process.Process,
 	mapping *process.RawMapping,
 	p parsedProbe,
 ) (link.Link, error) {
-	// TODO: prog := m.progs[p.Kind]; if nil, return errProgramNotLoaded
-	// TODO: resolve a path suitable for link.OpenExecutable. Two options:
-	//         a) pass "/proc/<pid>/map_files/<start>-<end>" directly
-	//         b) open via pr.OpenMappingFile and use /proc/self/fd/N
-	//       (a) is simpler if link.OpenExecutable accepts the symlink; verify.
-	// TODO: ex, err := link.OpenExecutable(path)
-	// TODO: opts := &link.UprobeOptions{
-	//         PID:          int(pid),
-	//         Address:      p.Location,
-	//         RefCtrOffset: refctrIfSupported(m.supportsRefCtr, p.SemaphoreOffset),
-	//         Cookie:       uint64(p.Kind), // richer encoding once we need it
-	//       }
-	// TODO: return ex.Uprobe("", prog, opts)
-	return nil, nil
-}
-
-// refctrIfSupported returns offset if the kernel supports RefCtrOffset PMU
-// attachments, else 0. Returning 0 degrades gracefully: the uprobe still
-// attaches, but the USDT semaphore won't be flipped and semaphored probe
-// sites will skip the call entirely.
-func refctrIfSupported(supported bool, offset uint64) uint64 {
-	if !supported {
-		return 0
+	prog, ok := m.progs[p.Kind]
+	if !ok {
+		return nil, errProgramNotLoaded
 	}
-	return offset
+
+	path := fmt.Sprintf("/proc/%d/map_files/%x-%x",
+		pid, mapping.Vaddr, mapping.Vaddr+mapping.Length)
+
+	ex, err := link.OpenExecutable(path)
+	if err != nil {
+		return nil, fmt.Errorf("open executable %s: %w", path, err)
+	}
+
+	// Empty symbol: we attach by absolute file offset (UprobeOptions.Address),
+	// not by symbol lookup. Cookie carries the ProbeKind so the BPF side can
+	// dispatch via bpf_get_attach_cookie() if it ever needs to.
+	lnk, err := ex.Uprobe("", prog, &link.UprobeOptions{
+		PID:          int(pid),
+		Address:      p.Location,
+		RefCtrOffset: p.SemaphoreOffset,
+		Cookie:       uint64(p.Kind),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("attach uprobe at %s+%#x: %w", path, p.Location, err)
+	}
+	log.Debugf("USDT attached pid=%d kind=%d path=%s offset=%#x semaphore=%#x",
+		pid, p.Kind, path, p.Location, p.SemaphoreOffset)
+	return lnk, nil
 }

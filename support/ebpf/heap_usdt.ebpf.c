@@ -30,8 +30,9 @@
 //   arg2 = weight (unbiased size estimator = nsamples * interval)
 // ─────────────────────────────────────────────────────────────────────────
 SEC("uprobe/heap_alloc")
-int uprobe_heap_alloc(struct pt_regs *ctx)
+int uprobe_heap_alloc(struct pt_regs *ctx __attribute__((unused)))
 {
+    DEBUG_PRINT("heap_usdt: alloc fired pid=%llu", bpf_get_current_pid_tgid() >> 32);
     // TODO: pull args via SysV AMD64 regs (rdi, rsi, rdx).
     // TODO: walk user stack via existing native unwinder entry path
     //       (mirror the PoC's PROG_ARRAY-of-uprobe-copies, or reuse the
@@ -49,8 +50,9 @@ int uprobe_heap_alloc(struct pt_regs *ctx)
 // immediately without a stack walk. Hot path on every free, must stay cheap.
 // ─────────────────────────────────────────────────────────────────────────
 SEC("uprobe/heap_free")
-int uprobe_heap_free(struct pt_regs *ctx)
+int uprobe_heap_free(struct pt_regs *ctx __attribute__((unused)))
 {
+    DEBUG_PRINT("heap_usdt: free fired pid=%llu", bpf_get_current_pid_tgid() >> 32);
     // TODO: pull arg0 (rdi).
     // TODO: lookup (pid, ptr) in alloc->free correlation map;
     //       bail out if not sampled.
@@ -58,4 +60,3 @@ int uprobe_heap_free(struct pt_regs *ctx)
     return 0;
 }
 
-char _license[] SEC("license") = "GPL";

@@ -4,6 +4,14 @@
 package usdt // import "go.opentelemetry.io/ebpf-profiler/usdt"
 
 import (
+	"debug/elf"
+	"errors"
+	"fmt"
+
+	parcausdt "github.com/parca-dev/usdt"
+
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
 
@@ -15,27 +23,71 @@ import (
 // the profiler. This matters because the same .so is typically mapped by
 // many processes.
 //
-// Implementation outline:
-//   - open the backing file via pr.OpenMappingFile (uses /proc/<pid>/map_files
-//     so it works for deleted-on-disk binaries and respects mount namespaces)
-//   - parse `.note.stapsdt` (via github.com/parca-dev/usdt's parser fed an
-//     ELFReader backed by our pfelf)
-//   - filter to Provider == ProbeProvider
-//   - map each (provider, name) to a ProbeKind via probeKindFromName
-//   - return []parsedProbe with file-offset-adjusted Location/SemaphoreOffset
+// A non-nil error means the file could not be opened or parsed; the caller
+// (Reconcile) treats those as soft failures and continues with other
+// mappings. A nil-error empty slice means "this binary has no probes we
+// want" and is cached so we won't re-parse it.
 func (m *Manager) scanMapping(
 	pr process.Process,
 	mapping *process.RawMapping,
 ) ([]parsedProbe, error) {
-	// TODO: fileID := mapping.GetOnDiskFileIdentifier()
-	// TODO: if cached, return from m.parseCache
-	// TODO: rac, err := pr.OpenMappingFile(mapping); defer rac.Close()
-	// TODO: wrap rac in a pfelf reader compatible with parcausdt.ELFReader
-	// TODO: parcausdt.ParseProbes(reader) -> []parcausdt.Probe
-	// TODO: filter Provider == ProbeProvider; map name -> ProbeKind via
-	//       probeKindFromName; drop ProbeUnknown
-	// TODO: store result (possibly empty slice) in m.parseCache
-	return nil, nil
+	fileID := mapping.GetOnDiskFileIdentifier()
+
+	if cached, ok := m.parseCache.Get(fileID); ok {
+		return cached, nil
+	}
+
+	// OpenELFMapping opens the mapping via /proc/<pid>/map_files/<s>-<e>,
+	// so it works for deleted-on-disk binaries and respects the target
+	// process's mount namespace.
+	ef, err := process.OpenELFMapping(pr, mapping)
+	if err != nil {
+		// ErrMappingFileUnavailable / non-ELF: cache empty so we don't
+		// retry on every Reconcile.
+		if errors.Is(err, process.ErrMappingFileUnavailable) {
+			m.parseCache.Add(fileID, nil)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open ELF mapping: %w", err)
+	}
+	defer ef.Close()
+
+	probes, err := parcausdt.ParseProbes(&pfelfReader{f: ef})
+	if err != nil {
+		return nil, fmt.Errorf("parse .note.stapsdt: %w", err)
+	}
+
+	if len(probes) > 0 {
+		log.Debugf("USDT parsed %d probe notes from PID %d mapping %#x-%#x (%s)",
+			len(probes), pr.PID(), mapping.Vaddr, mapping.Vaddr+mapping.Length, mapping.Path)
+	}
+
+	// Filter to the provider we care about and translate names to ProbeKind.
+	var out []parsedProbe
+	for i := range probes {
+		p := &probes[i]
+		if p.Provider != ProbeProvider {
+			continue
+		}
+		kind := probeKindFromName(p.Name)
+		if kind == ProbeUnknown {
+			continue
+		}
+		out = append(out, parsedProbe{
+			Kind:            kind,
+			Location:        p.Location,
+			SemaphoreOffset: p.SemaphoreOffset,
+		})
+	}
+
+	if len(out) > 0 {
+		log.Debugf("USDT discovered %d heap probe(s) from PID %d mapping %#x-%#x (%s)",
+			len(out), pr.PID(), mapping.Vaddr, mapping.Vaddr+mapping.Length, mapping.Path)
+	}
+
+	// Cache even empty results so probe-less binaries aren't re-parsed.
+	m.parseCache.Add(fileID, out)
+	return out, nil
 }
 
 // probeKindFromName maps a USDT probe name to a ProbeKind. Provider is
@@ -50,4 +102,50 @@ func probeKindFromName(name string) ProbeKind {
 	default:
 		return ProbeUnknown
 	}
+}
+
+// pfelfReader adapts *pfelf.File to parcausdt.ELFReader. Only `.note.stapsdt`
+// and `.stapsdt.base` need section data populated; other sections are
+// reported by name+addr only.
+type pfelfReader struct {
+	f *pfelf.File
+}
+
+func (r *pfelfReader) Sections() ([]parcausdt.ELFSection, error) {
+	if err := r.f.LoadSections(); err != nil {
+		return nil, err
+	}
+	out := make([]parcausdt.ELFSection, 0, len(r.f.Sections))
+	for i := range r.f.Sections {
+		s := &r.f.Sections[i]
+		sec := parcausdt.ELFSection{
+			Name: s.Name,
+			Addr: s.Addr,
+		}
+		if s.Name == ".note.stapsdt" || s.Name == ".stapsdt.base" {
+			data, err := s.Data(uint(s.Size))
+			if err != nil {
+				return nil, fmt.Errorf("read section %s: %w", s.Name, err)
+			}
+			sec.Data = data
+		}
+		out = append(out, sec)
+	}
+	return out, nil
+}
+
+func (r *pfelfReader) LoadSegments() []parcausdt.ELFProg {
+	var out []parcausdt.ELFProg
+	for i := range r.f.Progs {
+		p := &r.f.Progs[i]
+		if p.Type != elf.PT_LOAD {
+			continue
+		}
+		out = append(out, parcausdt.ELFProg{
+			Vaddr: p.Vaddr,
+			Memsz: p.Memsz,
+			Off:   p.Off,
+		})
+	}
+	return out
 }
