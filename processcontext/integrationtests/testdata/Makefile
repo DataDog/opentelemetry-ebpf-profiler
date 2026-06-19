@@ -23,7 +23,8 @@ MUSL_GCC  ?= $(ARCH)-linux-musl-gcc
 
 BINARIES := processctx_exe_glibc processctx_exe_musl processctx_lib_glibc processctx_lib_musl \
 	processctx_dlopen_glibc processctx_dlopen_musl libprocessctx_glibc.so libprocessctx_musl.so \
-	libprocessctx_glibc_ie.so libprocessctx_musl_ie.so processctx_lib_glibc_ie processctx_lib_musl_ie
+	libprocessctx_glibc_ie.so libprocessctx_musl_ie.so processctx_lib_glibc_ie processctx_lib_musl_ie \
+	libprocessctx_glibc_ld.so libprocessctx_musl_ld.so processctx_lib_glibc_ld processctx_lib_musl_ld
 
 ifeq ($(ARCH),x86_64)
 BINARIES += processctx_lib_glibc_gnu libprocessctx_glibc_gnu.so processctx_lib_musl_gnu libprocessctx_musl_gnu.so
@@ -47,10 +48,16 @@ libprocessctx_musl.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel
 	$(MUSL_GCC) -shared -fPIC -mtls-dialect=$(TLS_DIALECT) -o $@ $< otel_process_ctx.c
 
 libprocessctx_glibc_ie.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
-	$(GCC) -shared -fPIC -o $@ $< otel_process_ctx.c -DFORCE_TLS_MODEL_INITIAL_EXEC
+	$(GCC) -shared -fPIC -o $@ $< otel_process_ctx.c -DFORCED_TLS_MODEL="initial-exec"
 
 libprocessctx_musl_ie.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
-	$(MUSL_GCC) -shared -fPIC -o $@ $< otel_process_ctx.c -DFORCE_TLS_MODEL_INITIAL_EXEC
+	$(MUSL_GCC) -shared -fPIC -o $@ $< otel_process_ctx.c -DFORCED_TLS_MODEL="initial-exec"
+
+libprocessctx_glibc_ld.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(GCC) -shared -fPIC -o $@ $< otel_process_ctx.c -DFORCED_TLS_MODEL="local-dynamic"
+
+libprocessctx_musl_ld.so: processctx_lib.c processctx_lib.h otel_process_ctx.c otel_process_ctx.h
+	$(MUSL_GCC) -shared -fPIC -o $@ $< otel_process_ctx.c -DFORCED_TLS_MODEL="local-dynamic"
 
 processctx_lib_glibc: processctx.c processctx_lib.h libprocessctx_glibc.so
 	$(GCC) -o $@ $< -L. -lprocessctx_glibc -Wl,-rpath='$$ORIGIN'
@@ -63,6 +70,12 @@ processctx_lib_glibc_ie: processctx.c processctx_lib.h libprocessctx_glibc_ie.so
 
 processctx_lib_musl_ie: processctx.c processctx_lib.h libprocessctx_musl_ie.so
 	$(MUSL_GCC) -o $@ $< -L. -lprocessctx_musl_ie -Wl,-rpath=/lib/x86_64-linux-musl/ -Wl,-rpath='$$ORIGIN'
+
+processctx_lib_glibc_ld: processctx.c processctx_lib.h libprocessctx_glibc_ld.so
+	$(GCC) -o $@ $< -L. -lprocessctx_glibc_ld -Wl,-rpath='$$ORIGIN'
+
+processctx_lib_musl_ld: processctx.c processctx_lib.h libprocessctx_musl_ld.so
+	$(MUSL_GCC) -o $@ $< -L. -lprocessctx_musl_ld -Wl,-rpath=/lib/x86_64-linux-musl/ -Wl,-rpath='$$ORIGIN'
 
 processctx_dlopen_glibc: processctx.c
 	$(GCC) -o $@ $< -DUSE_DLOPEN
