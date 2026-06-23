@@ -4,8 +4,10 @@
 package pdata // import "go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -24,6 +26,48 @@ import (
 const (
 	ExecutableCacheLifetime = 1 * time.Hour
 )
+
+type profileKind uint8
+
+const (
+	profileKindDefault profileKind = iota
+	profileKindHeapAllocObjects
+)
+
+func sortedSampleKeys(events samples.SampleToEvents) []samples.SampleKey {
+	keys := make([]samples.SampleKey, 0, len(events))
+	for sampleKey := range events {
+		keys = append(keys, sampleKey)
+	}
+	slices.SortFunc(keys, compareSampleKeys)
+	return keys
+}
+
+func compareSampleKeys(a, b samples.SampleKey) int {
+	if n := cmp.Compare(a.Comm.String(), b.Comm.String()); n != 0 {
+		return n
+	}
+	if a.Hash.Less(b.Hash) {
+		return -1
+	}
+	if b.Hash.Less(a.Hash) {
+		return 1
+	}
+	if n := cmp.Compare(a.TID, b.TID); n != 0 {
+		return n
+	}
+	if n := cmp.Compare(a.CPU, b.CPU); n != 0 {
+		return n
+	}
+	if n := slices.Compare(a.SpanID[:], b.SpanID[:]); n != 0 {
+		return n
+	}
+	if n := slices.Compare(a.TraceID[:], b.TraceID[:]); n != 0 {
+		return n
+	}
+	return cmp.Compare(fmt.Sprintf("%T:%#v", a.ExtraMeta, a.ExtraMeta),
+		fmt.Sprintf("%T:%#v", b.ExtraMeta, b.ExtraMeta))
+}
 
 // Generate generates a pdata request out of internal profiles data, to be
 // exported. The collectionStartTime and collectionEndTime define the time window
@@ -107,9 +151,19 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 			prof := sp.Profiles().AppendEmpty()
 			if err := p.setProfile(dic, attrMgr,
 				stringSet, funcSet, mappingSet, stackSet, locationSet, linkSet,
-				origin, toEvents.Events[origin], prof,
+				origin, profileKindDefault, toEvents.Events[origin], prof,
 				collectionStartTime, collectionEndTime); err != nil {
 				return profiles, err
+			}
+
+			if origin == support.TraceOriginHeapAlloc {
+				prof := sp.Profiles().AppendEmpty()
+				if err := p.setProfile(dic, attrMgr,
+					stringSet, funcSet, mappingSet, stackSet, locationSet, linkSet,
+					origin, profileKindHeapAllocObjects, toEvents.Events[origin], prof,
+					collectionStartTime, collectionEndTime); err != nil {
+					return profiles, err
+				}
 			}
 		}
 
@@ -148,6 +202,7 @@ func (p *Pdata) setProfile(
 	locationSet orderedset.OrderedSet[locationInfo],
 	linkSet orderedset.OrderedSet[linkInfo],
 	origin libpf.Origin,
+	kind profileKind,
 	events samples.SampleToEvents,
 	profile pprofile.Profile,
 	collectionStartTime, collectionEndTime time.Time,
@@ -169,20 +224,39 @@ func (p *Pdata) setProfile(
 		st.SetTypeStrindex(stringSet.Add("events"))
 		st.SetUnitStrindex(stringSet.Add("count"))
 	case support.TraceOriginHeapAlloc:
-		st.SetTypeStrindex(stringSet.Add("alloc_space"))
-		st.SetUnitStrindex(stringSet.Add("bytes"))
-		log.Debugf("HEAP_PROFILE_PIPELINE stage=pdata_profile_start stacks=%d", len(events))
+		if kind == profileKindHeapAllocObjects {
+			st.SetTypeStrindex(stringSet.Add("alloc_objects"))
+			st.SetUnitStrindex(stringSet.Add("count"))
+			log.Debugf("HEAP_PROFILE_PIPELINE stage=pdata_profile_start type=alloc_objects stacks=%d", len(events))
+		} else {
+			st.SetTypeStrindex(stringSet.Add("alloc_space"))
+			st.SetUnitStrindex(stringSet.Add("bytes"))
+			log.Debugf("HEAP_PROFILE_PIPELINE stage=pdata_profile_start type=alloc_space stacks=%d", len(events))
+		}
 	default:
 		// Should never happen
 		return fmt.Errorf("generating profile for unsupported origin %d", origin)
 	}
 
-	for sampleKey, traceInfo := range events {
+	// Due to the OTLP Profiles spec, heap allocation size and object count need
+	// to be emitted as two Profile messages. Keep sample iteration deterministic
+	// so corresponding samples optimally remain ordered the same in both profiles.
+	for _, sampleKey := range sortedSampleKeys(events) {
+		traceInfo := events[sampleKey]
 		sample := profile.Samples().AppendEmpty()
 
 		sample.TimestampsUnixNano().FromRaw(traceInfo.Timestamps)
-		if origin == support.TraceOriginOffCPU || origin == support.TraceOriginHeapAlloc {
+		if origin == support.TraceOriginOffCPU {
 			sample.Values().Append(traceInfo.Values...)
+		}
+		if origin == support.TraceOriginHeapAlloc {
+			if kind == profileKindHeapAllocObjects {
+				for range traceInfo.Values {
+					sample.Values().Append(1)
+				}
+			} else {
+				sample.Values().Append(traceInfo.Values...)
+			}
 		}
 
 		if sampleKey.SpanID != libpf.InvalidAPMSpanID &&
@@ -297,7 +371,11 @@ func (p *Pdata) setProfile(
 	} // End sample processing
 
 	if origin == support.TraceOriginHeapAlloc {
-		log.Debugf("HEAP_PROFILE_PIPELINE stage=pdata_profile_built samples=%d", profile.Samples().Len())
+		profileType := "alloc_space"
+		if kind == profileKindHeapAllocObjects {
+			profileType = "alloc_objects"
+		}
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=pdata_profile_built type=%s samples=%d", profileType, profile.Samples().Len())
 	} else {
 		log.Debugf("Reporting OTLP profile with %d samples", profile.Samples().Len())
 	}

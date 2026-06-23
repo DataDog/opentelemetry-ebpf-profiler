@@ -852,3 +852,61 @@ func TestGenerate_Validate(t *testing.T) {
 		CheckSampleTimestampShape: true}).Check(&data)
 	require.NoError(t, err)
 }
+func TestHeapAllocProducesSpaceAndObjectsProfiles(t *testing.T) {
+	d, err := New(100, nil)
+	require.NoError(t, err)
+
+	mapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:   libpf.NewFileID(11, 12),
+			FileName: libpf.Intern("/bin/heap-app"),
+		}),
+	})
+	frames := singleFrameTrace(libpf.NativeFrame, mapping, 0x1234, "", libpf.NullString, 0)
+
+	timestamps := []uint64{
+		uint64(time.Unix(1010, 0).UnixNano()),
+		uint64(time.Unix(1020, 0).UnixNano()),
+	}
+	tree := samples.TraceEventsTree{
+		{ExecutablePath: libpf.Intern("/bin/heap-app")}: samples.ResourceToProfiles{
+			Events: map[libpf.Origin]samples.SampleToEvents{
+				support.TraceOriginHeapAlloc: {
+					{}: &samples.TraceEvents{
+						Frames:     frames,
+						Timestamps: timestamps,
+						Values:     []int64{128, 256},
+					},
+				},
+			},
+		},
+	}
+
+	profiles, err := testGenerate(d, tree, "agent", "v1")
+	require.NoError(t, err)
+	require.Equal(t, 1, profiles.ResourceProfiles().Len())
+	sp := profiles.ResourceProfiles().At(0).ScopeProfiles().At(0)
+	require.Equal(t, 2, sp.Profiles().Len())
+
+	profilesByType := make(map[string]pprofile.Profile)
+	strings := profiles.Dictionary().StringTable()
+	for i := 0; i < sp.Profiles().Len(); i++ {
+		prof := sp.Profiles().At(i)
+		sampleType := prof.SampleType()
+		profilesByType[strings.At(int(sampleType.TypeStrindex()))] = prof
+	}
+
+	allocSpace, ok := profilesByType["alloc_space"]
+	require.True(t, ok)
+	assert.Equal(t, "bytes", strings.At(int(allocSpace.SampleType().UnitStrindex())))
+	require.Equal(t, 1, allocSpace.Samples().Len())
+	assert.Equal(t, []int64{128, 256}, allocSpace.Samples().At(0).Values().AsRaw())
+	assert.Equal(t, timestamps, allocSpace.Samples().At(0).TimestampsUnixNano().AsRaw())
+
+	allocObjects, ok := profilesByType["alloc_objects"]
+	require.True(t, ok)
+	assert.Equal(t, "count", strings.At(int(allocObjects.SampleType().UnitStrindex())))
+	require.Equal(t, 1, allocObjects.Samples().Len())
+	assert.Equal(t, []int64{1, 1}, allocObjects.Samples().At(0).Values().AsRaw())
+	assert.Equal(t, timestamps, allocObjects.Samples().At(0).TimestampsUnixNano().AsRaw())
+}

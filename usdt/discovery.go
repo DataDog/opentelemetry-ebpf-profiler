@@ -43,8 +43,10 @@ func (m *Manager) scanMapping(
 	ef, err := process.OpenELFMapping(pr, mapping)
 	if err != nil {
 		// ErrMappingFileUnavailable / non-ELF: cache empty so we don't
-		// retry on every Reconcile.
-		if errors.Is(err, process.ErrMappingFileUnavailable) {
+		// retry on every Reconcile. Not every executable file-backed mapping is
+		// an ELF object (for example memfd/JIT/runtime-generated mappings), so
+		// non-ELF mappings are expected while scanning for heap USDT notes.
+		if errors.Is(err, process.ErrMappingFileUnavailable) || errors.Is(err, pfelf.ErrNotELF) {
 			m.parseCache.Add(fileID, nil)
 			return nil, nil
 		}
