@@ -14,12 +14,12 @@ exporters:
       dd-api-key: ${env:DD_API_KEY}
       dd-evp-origin: opentelemetry-ebpf-profiler-dev
       dd-evp-origin-version: dev
-      x-datadog-profiling-metadata: hotdog:scott,dd.hotdog:scott
+      # x-datadog-profiling-metadata: hotdog:scott,dd.hotdog:scott,prof.hotdog:scott
 
 service:
   telemetry:
     logs:
-      level: info
+      level: debug
     metrics:
       readers:
         - pull:
