@@ -319,10 +319,7 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_BPFRingbufOutputErr:                        metrics.IDBPFRingbufOutputErr,
 	C.metricID_NumPrctlSetVmaOtelCtx:                      metrics.IDNumPrctlSetVmaOtelCtx,
 	C.metricID_UnwindThreadContextErrReadTsdBase:          metrics.IDUnwindThreadContextErrReadTsdBase,
-	C.metricID_UnwindThreadContextErrReadThreadCtxBufPtr:  metrics.IDUnwindThreadContextErrReadThreadCtxBufPtr,
 	C.metricID_UnwindThreadContextErrReadThreadCtxBuf:     metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
 	C.metricID_UnwindThreadContextErrReadThreadCtxAttrs:   metrics.IDUnwindThreadContextErrReadThreadCtxAttrs,
-	C.metricID_UnwindThreadContextErrReadDtvPtr:           metrics.IDUnwindThreadContextErrReadDtvPtr,
-	C.metricID_UnwindThreadContextErrReadModuleTlsBase:    metrics.IDUnwindThreadContextErrReadModuleTlsBase,
 	C.metricID_UnwindThreadContextReadSuccesses:           metrics.IDUnwindThreadContextReadSuccesses,
 }

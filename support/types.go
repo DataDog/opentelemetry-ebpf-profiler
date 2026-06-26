@@ -62,7 +62,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x72
+	MetricIDBeginCumulative = 0x6f
 )
 
 const (
@@ -319,9 +319,9 @@ type RubyProcInfo struct {
 	Pad_cgo_0                    [4]byte
 }
 type ThreadContextProcInfo struct {
-	Tls_offset    int32
-	Dtv_offset    int32
-	Module_offset int32
+	Tls_offset int32
+	Module_id  uint32
+	Dtv_info   DTVInfo
 }
 type V8ProcInfo struct {
 	Version                      uint32
@@ -519,10 +519,7 @@ var MetricsTranslation = []metrics.MetricID{
 	0x69: metrics.IDBPFRingbufOutputErr,
 	0x6a: metrics.IDNumPrctlSetVmaOtelCtx,
 	0x6b: metrics.IDUnwindThreadContextErrReadTsdBase,
-	0x6c: metrics.IDUnwindThreadContextErrReadThreadCtxBufPtr,
-	0x6d: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
-	0x6e: metrics.IDUnwindThreadContextErrReadThreadCtxAttrs,
-	0x6f: metrics.IDUnwindThreadContextErrReadDtvPtr,
-	0x70: metrics.IDUnwindThreadContextErrReadModuleTlsBase,
-	0x71: metrics.IDUnwindThreadContextReadSuccesses,
+	0x6c: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
+	0x6d: metrics.IDUnwindThreadContextErrReadThreadCtxAttrs,
+	0x6e: metrics.IDUnwindThreadContextReadSuccesses,
 }
