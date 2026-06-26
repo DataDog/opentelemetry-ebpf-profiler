@@ -80,7 +80,10 @@ func Test_ProcessContext(t *testing.T) {
 		args    []string
 		env     []string
 	}{
+		// Executables that define the TLS symbol themselves: local-exec model.
 		"glibc_exe": {exeName: "processctx_exe_glibc"},
+		"musl_exe":  {exeName: "processctx_exe_musl"},
+
 		// Publishes the process context after a delay, so the profiler discovers
 		// the PID before the publication and the prctl monitor must trigger a
 		// resync to pick up the OTEL_CTX mapping.
@@ -88,11 +91,25 @@ func Test_ProcessContext(t *testing.T) {
 			exeName: "processctx_exe_glibc",
 			env:     []string{"OTEL_PROCESS_CTX_PUBLISH_DELAY_MS=200"},
 		},
-		"musl_exe":     {exeName: "processctx_exe_musl"},
-		"glibc_lib":    {exeName: "processctx_lib_glibc"},
-		"musl_lib":     {exeName: "processctx_lib_musl"},
-		"glibc_dlopen": {exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc.so")}},
-		"musl_dlopen":  {exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl.so")}},
+
+		// Executables linking a shared library at startup. The library accesses
+		// its own TLS symbol, exercising the general-dynamic (default and GNU
+		// dialects), initial-exec and local-dynamic models.
+		"glibc_lib":     {exeName: "processctx_lib_glibc"},
+		"musl_lib":      {exeName: "processctx_lib_musl"},
+		"glibc_lib_gnu": {exeName: "processctx_lib_glibc_gnu"},
+		"musl_lib_gnu":  {exeName: "processctx_lib_musl_gnu"},
+		"glibc_lib_ie":  {exeName: "processctx_lib_glibc_ie"},
+		"musl_lib_ie":   {exeName: "processctx_lib_musl_ie"},
+		"glibc_lib_ld":  {exeName: "processctx_lib_glibc_ld"},
+		"musl_lib_ld":   {exeName: "processctx_lib_musl_ld"},
+
+		// dlopen'd libraries: the module is loaded after startup, exercising the
+		// dynamic-TLS resolution path (DTV based) for both dialects.
+		"glibc_dlopen":     {exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc.so")}},
+		"musl_dlopen":      {exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl.so")}},
+		"glibc_dlopen_gnu": {exeName: "processctx_dlopen_glibc", args: []string{filepath.Join(exeDir, "libprocessctx_glibc_gnu.so")}},
+		"musl_dlopen_gnu":  {exeName: "processctx_dlopen_musl", args: []string{filepath.Join(exeDir, "libprocessctx_musl_gnu.so")}},
 	}
 
 	for name, tc := range tests {
