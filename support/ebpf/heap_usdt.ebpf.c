@@ -26,9 +26,9 @@
 static EBPF_INLINE u64 usdt_arg0(struct pt_regs *ctx)
 {
 #if defined(__x86_64__)
-    return ctx->di;
+  return ctx->di;
 #elif defined(__aarch64__)
-    return ctx->regs[0];
+  return ctx->regs[0];
 #else
   #error "Unsupported architecture"
 #endif
@@ -37,9 +37,9 @@ static EBPF_INLINE u64 usdt_arg0(struct pt_regs *ctx)
 static EBPF_INLINE u64 usdt_arg1(struct pt_regs *ctx)
 {
 #if defined(__x86_64__)
-    return ctx->si;
+  return ctx->si;
 #elif defined(__aarch64__)
-    return ctx->regs[1];
+  return ctx->regs[1];
 #else
   #error "Unsupported architecture"
 #endif
@@ -48,9 +48,9 @@ static EBPF_INLINE u64 usdt_arg1(struct pt_regs *ctx)
 static EBPF_INLINE u64 usdt_arg2(struct pt_regs *ctx)
 {
 #if defined(__x86_64__)
-    return ctx->dx;
+  return ctx->dx;
 #elif defined(__aarch64__)
-    return ctx->regs[2];
+  return ctx->regs[2];
 #else
   #error "Unsupported architecture"
 #endif
@@ -66,18 +66,18 @@ static EBPF_INLINE u64 usdt_arg2(struct pt_regs *ctx)
 SEC("uprobe/heap_alloc")
 int uprobe_heap_alloc(struct pt_regs *ctx)
 {
-    u64 user   = usdt_arg0(ctx);
-    u64 size   = usdt_arg1(ctx);
-    u64 weight = usdt_arg2(ctx);
+  u64 user   = usdt_arg0(ctx);
+  u64 size   = usdt_arg1(ctx);
+  u64 weight = usdt_arg2(ctx);
 
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 pid      = pid_tgid >> 32;
-    u32 tid      = pid_tgid;
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid      = pid_tgid >> 32;
+  u32 tid      = pid_tgid;
 
-    DEBUG_PRINT("heap_usdt: alloc pid=%llu ptr=%llx", pid_tgid >> 32, user);
-    DEBUG_PRINT("heap_usdt: alloc size=%llu weight=%llu", size, weight);
+  DEBUG_PRINT("heap_usdt: alloc pid=%llu ptr=%llx", pid_tgid >> 32, user);
+  DEBUG_PRINT("heap_usdt: alloc size=%llu weight=%llu", size, weight);
 
-    return collect_trace(ctx, TRACE_HEAP_ALLOC, pid, tid, bpf_ktime_get_ns(), weight);
+  return collect_trace(ctx, TRACE_HEAP_ALLOC, pid, tid, bpf_ktime_get_ns(), weight);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -91,12 +91,11 @@ int uprobe_heap_alloc(struct pt_regs *ctx)
 SEC("uprobe/heap_free")
 int uprobe_heap_free(struct pt_regs *ctx)
 {
-    u64 ptr = usdt_arg0(ctx);
+  u64 ptr = usdt_arg0(ctx);
 
-    DEBUG_PRINT("heap_usdt: free pid=%llu ptr=%llx", bpf_get_current_pid_tgid() >> 32, ptr);
-    // TODO: lookup (pid, ptr) in alloc->free correlation map;
-    //       bail out if not sampled.
-    // TODO: emit free event (no stack walk needed for v1).
-    return 0;
+  DEBUG_PRINT("heap_usdt: free pid=%llu ptr=%llx", bpf_get_current_pid_tgid() >> 32, ptr);
+  // TODO: lookup (pid, ptr) in alloc->free correlation map;
+  //       bail out if not sampled.
+  // TODO: emit free event (no stack walk needed for v1).
+  return 0;
 }
-
