@@ -1,0 +1,41 @@
+name: Comment on metrics.json changes in PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  metrics-diff-comment:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Build metrics diff comment
+        id: metrics
+        run: |
+          git show "${{ github.event.pull_request.base.sha }}:metrics/metrics.json" > /tmp/metrics_before.json
+          git show "${{ github.event.pull_request.head.sha }}:metrics/metrics.json" > /tmp/metrics_after.json
+          python3 .github/workflows/scripts/metrics-pr-comment.py /tmp/metrics_before.json /tmp/metrics_after.json
+
+      - name: Find metrics PR comment
+        id: find-comment
+        uses: peter-evans/find-comment@3eae4d37986fb5a8592848f6a574fdf654e61f9e # v3.1.0
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: "<!-- metrics-json-diff -->"
+
+      - name: Post metrics PR comment
+        uses: peter-evans/create-or-update-comment@71345be0265236311c031f5c7866368bd1eff043 # v4.0.0
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body: ${{ steps.metrics.outputs.comment }}
