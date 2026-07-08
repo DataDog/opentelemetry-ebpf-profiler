@@ -346,8 +346,19 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	cacheMiss := uint64(0)
 	cacheHit := uint64(0)
 
-	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
-		frame := frames[:frames.Length()]
+	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; {
+		frameLen := int(frames.Length())
+		if frameLen == 0 || frameLen > len(frames) {
+			remaining := []uint64(frames)
+			if len(remaining) > 8 {
+				remaining = remaining[:8]
+			}
+			log.Warnf("dropping malformed eBPF frame data: pid=%d tid=%d origin=%d frame_data_len=%d remaining=%d frame_len=%d first_remaining_words=%#x",
+				bpfTrace.PID, bpfTrace.TID, bpfTrace.Origin, len(bpfTrace.FrameData), len(frames), frameLen, remaining)
+			break
+		}
+		frame := frames[:frameLen]
+		frames = frames[frameLen:]
 		if frame.Flags().Error() {
 			if !pm.filterErrorFrames {
 				trace.Frames.Append(&libpf.Frame{

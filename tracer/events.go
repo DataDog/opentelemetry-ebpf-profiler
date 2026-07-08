@@ -233,6 +233,9 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 				case errors.Is(err, errOriginUnexpected):
 					log.Warnf("skip trace handling: %v", err)
 					continue
+				case errors.Is(err, errRecordMalformed):
+					log.Warnf("skip malformed trace handling: %v", err)
+					continue
 				case errors.Is(err, errRecordTooSmall), errors.Is(err, errRecordUnexpectedSize):
 					log.Errorf("Stop receiving traces: %v", err)
 					t.signalDone()

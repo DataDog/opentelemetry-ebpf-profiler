@@ -1059,8 +1059,45 @@ func (t *Tracer) eBPFMetricsCollector(
 var (
 	errRecordTooSmall       = errors.New("trace record too small")
 	errRecordUnexpectedSize = errors.New("unexpected record size")
+	errRecordMalformed      = errors.New("malformed trace record")
 	errOriginUnexpected     = errors.New("unexpected origin")
 )
+
+const maxTraceDebugWords = 8
+
+func ebpfFrameDataPrefix(frameData []uint64) []uint64 {
+	if len(frameData) > maxTraceDebugWords {
+		return frameData[:maxTraceDebugWords]
+	}
+	return frameData
+}
+
+func ebpfFrameLengths(frameData []uint64) []uint8 {
+	lengths := make([]uint8, 0, min(len(frameData), maxTraceDebugWords))
+	for frames := libpf.EbpfFrame(frameData); len(frames) > 0 && len(lengths) < maxTraceDebugWords; {
+		frameLen := frames.Length()
+		lengths = append(lengths, frameLen)
+		if frameLen == 0 || int(frameLen) > len(frames) {
+			break
+		}
+		frames = frames[frameLen:]
+	}
+	return lengths
+}
+
+func validateEbpfFrameData(frameData []uint64) error {
+	for frames := libpf.EbpfFrame(frameData); len(frames) > 0; {
+		frameLen := int(frames.Length())
+		if frameLen == 0 {
+			return fmt.Errorf("zero-length frame with %d words remaining", len(frames))
+		}
+		if frameLen > len(frames) {
+			return fmt.Errorf("frame length %d exceeds %d remaining words", frameLen, len(frames))
+		}
+		frames = frames[frameLen:]
+	}
+	return nil
+}
 
 // loadBpfTrace parses a raw BPF trace into a `host.Trace` instance.
 func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
@@ -1071,12 +1108,30 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 	}
 
 	ptr := traceFromRaw(raw)
-	frameDataLen := int(ptr.Frame_data_len) * 8
+	frameDataWords := int(ptr.Frame_data_len)
+	frameDataLen := frameDataWords * 8
 
 	// NOTE: can't do exact check here: kernel adds a few padding bytes to messages.
 	if len(raw) < frameListOffs+frameDataLen {
 		return nil, fmt.Errorf("%d < %d: %w", len(raw), frameListOffs+frameDataLen,
 			errRecordUnexpectedSize)
+	}
+	if frameDataWords > len(ptr.Frame_data) {
+		return nil, fmt.Errorf("frame_data_len %d > max %d: %w",
+			frameDataWords, len(ptr.Frame_data), errRecordMalformed)
+	}
+	numKernelFrames := int(ptr.Num_kernel_frames)
+	if numKernelFrames > frameDataWords {
+		return nil, fmt.Errorf("num_kernel_frames %d > frame_data_len %d: %w",
+			numKernelFrames, frameDataWords, errRecordMalformed)
+	}
+	userFrameData := ptr.Frame_data[numKernelFrames:frameDataWords]
+	if err := validateEbpfFrameData(userFrameData); err != nil {
+		return nil, fmt.Errorf(
+			"pid=%d tid=%d origin=%d frame_data_len=%d num_kernel_frames=%d user_frame_len=%d first_user_words=%#x decoded_lengths=%v: %w: %v",
+			ptr.Pid, ptr.Tid, ptr.Origin, frameDataWords, numKernelFrames, len(userFrameData),
+			ebpfFrameDataPrefix(userFrameData), ebpfFrameLengths(userFrameData),
+			errRecordMalformed, err)
 	}
 
 	pid := libpf.PID(ptr.Pid)
@@ -1128,16 +1183,20 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 
 	trace.NumFrames = ptr.Num_frames
 
+	if trace.Origin == support.TraceOriginHeapAlloc {
+		log.Debugf("HEAP_PROFILE_PIPELINE stage=load_bpf_trace pid=%d tid=%d value=%d raw_len=%d frame_data_len=%d num_kernel_frames=%d bpf_num_frames=%d user_frame_len=%d first_user_words=%#x decoded_lengths=%v",
+			trace.PID, trace.TID, trace.Value, len(raw), frameDataWords, numKernelFrames, trace.NumFrames, len(userFrameData),
+			ebpfFrameDataPrefix(userFrameData), ebpfFrameLengths(userFrameData))
+	}
+
 	// Symbolize kernel frames directly from the raw BPF data before copying
 	// userspace frame data, so we only copy what's needed.
-	numKernelFrames := int(ptr.Num_kernel_frames)
 	if numKernelFrames > 0 {
 		trace.KernelFrames = t.symbolizeKernelFrames(
 			ptr.Frame_data[:numKernelFrames], trace.KernelFrames)
 	}
-	userFrameLen := int(ptr.Frame_data_len) - numKernelFrames
-	trace.FrameData = trace.FrameDataBuf[:userFrameLen]
-	copy(trace.FrameData, ptr.Frame_data[numKernelFrames:ptr.Frame_data_len])
+	trace.FrameData = trace.FrameDataBuf[:len(userFrameData)]
+	copy(trace.FrameData, userFrameData)
 
 	return trace, nil
 }
