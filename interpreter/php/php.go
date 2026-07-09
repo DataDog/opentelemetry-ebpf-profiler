@@ -101,6 +101,11 @@ func (d *phpData) String() string {
 	return fmt.Sprintf("PHP %d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff)
 }
 
+func (d *phpData) RuntimeInfo() (string, string, bool) {
+	ver := d.version
+	return "php", fmt.Sprintf("%d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff), true
+}
+
 func (d *phpData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.Address,
 	rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {

@@ -215,6 +215,14 @@ func (pm *ProcessManager) handleNewInterpreter(pr process.Process, bias libpf.Ad
 	log.Debugf("Attached to %v interpreter in PID %v", data, pid)
 	pm.assignInterpreter(pid, oid, instance)
 
+	// Record the runtime version for OTLP process.runtime.* emission. First
+	// interpreter reporting a runtime wins
+	if _, exists := pm.runtimeInfos[pid]; !exists {
+		if name, version, ok := data.RuntimeInfo(); ok {
+			pm.runtimeInfos[pid] = runtimeInfo{name: name, version: version}
+		}
+	}
+
 	if libcInfo := pm.getLibcInfo(pid); libcInfo != nil {
 		err = instance.UpdateLibcInfo(pm.ebpf, pid, *libcInfo)
 		if err != nil {
@@ -365,6 +373,7 @@ func (pm *ProcessManager) processRemovedInterpreters(pid libpf.PID,
 		// There are no longer any mapped interpreters in the process, therefore we can
 		// remove the entry.
 		delete(pm.interpreters, pid)
+		delete(pm.runtimeInfos, pid)
 	}
 	return anonymousMappingsWanted
 }
@@ -916,6 +925,7 @@ func (pm *ProcessManager) ProcessedUntil(traceCaptureKTime times.KTime) {
 			}
 		}
 		delete(pm.interpreters, pid)
+		delete(pm.runtimeInfos, pid)
 		delete(pm.exitEvents, pid)
 		log.Debugf("PID %v exit latency %v ms", pid, (nowKTime-pidExitKTime)/1e6)
 	}

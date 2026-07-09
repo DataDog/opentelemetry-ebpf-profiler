@@ -67,6 +67,17 @@ func (m *MultiData) Unload(ebpf EbpfHandler) {
 	}
 }
 
+// RuntimeInfo returns the runtime info of the first wrapped interpreter that
+// reports one (ok=true), or ok=false if none do.
+func (m *MultiData) RuntimeInfo() (string, string, bool) {
+	for _, data := range m.interpreters {
+		if name, version, ok := data.RuntimeInfo(); ok {
+			return name, version, ok
+		}
+	}
+	return "", "", false
+}
+
 // MultiInstance implements the Instance interface for multiple interpreters.
 type MultiInstance struct {
 	instances []Instance

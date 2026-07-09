@@ -49,26 +49,42 @@ func pythonVer(major, minor uint16) uint16 {
 	return major*0x100 + minor
 }
 
-func readPyVersionHex(ef *pfelf.File) (major uint8, minor uint8, err error) {
+// decodePyVersionHex extracts major.minor.micro from the CPython PY_VERSION_HEX
+// layout: (major<<24) | (minor<<16) | (micro<<8) | (releaselevel<<4) | serial.
+// The micro/patch byte is used only for RuntimeInfo() source resolution, not for
+// offset selection
+// https://docs.python.org/3/c-api/apiabiversion.html
+func decodePyVersionHex(versionHex uint32) (major uint8, minor uint8, patch uint8) {
+	return uint8((versionHex >> 24) & 0xff),
+		uint8((versionHex >> 16) & 0xff),
+		uint8((versionHex >> 8) & 0xff)
+}
+
+func readPyVersionHex(ef *pfelf.File) (major uint8, minor uint8, patch uint8, err error) {
 	// Py_Version is referenced in CPython internals for versioned Python binaries.
 	// https://github.com/python/cpython/blob/v3.11.0/Doc/c-api/apiabiversion.rst
 	addr, err := ef.LookupSymbolAddress("Py_Version")
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	rm := ef.GetRemoteMemory()
 	versionHex := rm.Uint32(libpf.Address(addr))
-	major = uint8((versionHex >> 24) & 0xff)
-	minor = uint8((versionHex >> 16) & 0xff)
+	major, minor, patch = decodePyVersionHex(versionHex)
 	if major == 0 {
-		return 0, 0, fmt.Errorf("invalid Py_Version 0x%x", versionHex)
+		return 0, 0, 0, fmt.Errorf("invalid Py_Version 0x%x", versionHex)
 	}
-	return major, minor, nil
+	return major, minor, patch, nil
 }
 
 //nolint:lll
 type pythonData struct {
 	version uint16
+
+	// fullVersion is the "major.minor" or "major.minor.patch" string reported by
+	// RuntimeInfo(). patch is only present when read from the Py_Version symbol
+	// (path-derived versions lack it). Used for stdlib source resolution only,
+	// never for offset selection. See doc/runtime-version-emission.md §5.1.
+	fullVersion string
 
 	autoTLSKey libpf.SymbolValue
 
@@ -139,6 +155,10 @@ var _ interpreter.Data = &pythonData{}
 
 func (d *pythonData) String() string {
 	return fmt.Sprintf("Python %d.%d", d.version>>8, d.version&0xff)
+}
+
+func (d *pythonData) RuntimeInfo() (string, string, bool) {
+	return "cpython", d.fullVersion, true
 }
 
 func (d *pythonData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.Address,
@@ -768,13 +788,18 @@ func loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	if err != nil {
 		return nil, err
 	}
-	if major == 0 {
-		majorFromSym, minorFromSym, versionErr := readPyVersionHex(ef)
-		if versionErr != nil {
-			return nil, nil
+
+	var patch uint8
+	patchKnown := false
+	if majorFromSym, minorFromSym, patchFromSym, versionErr := readPyVersionHex(ef); versionErr == nil {
+		if major == 0 {
+			major = uint16(majorFromSym)
+			minor = uint16(minorFromSym)
 		}
-		major = uint16(majorFromSym)
-		minor = uint16(minorFromSym)
+		patch = patchFromSym
+		patchKnown = true
+	} else if major == 0 {
+		return nil, nil
 	}
 
 	if mainDSO {
@@ -841,8 +866,13 @@ func loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 	}
 
+	fullVersion := fmt.Sprintf("%d.%d", major, minor)
+	if patchKnown {
+		fullVersion = fmt.Sprintf("%d.%d.%d", major, minor, patch)
+	}
 	pd := &pythonData{
 		version:         version,
+		fullVersion:     fullVersion,
 		autoTLSKey:      autoTLSKey,
 		staticTLSOffset: staticTLSOffset,
 	}

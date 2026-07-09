@@ -58,6 +58,12 @@ type ProcessManager struct {
 	// the unique on-disk identifier of the interpreter DSO.
 	interpreters map[libpf.PID]map[util.OnDiskFileIdentifier]interpreter.Instance
 
+	// runtimeInfos records the language runtime (name + full version) detected
+	// for each PID, for emission as OTLP process.runtime.* resource attributes.
+	// First interpreter reporting RuntimeInfo(ok=true) wins and is never
+	// overwritten.
+	runtimeInfos map[libpf.PID]runtimeInfo
+
 	// pidToProcessInfo keeps track of the executable memory mappings.
 	pidToProcessInfo map[libpf.PID]*processInfo
 
@@ -123,6 +129,13 @@ type ProcessManager struct {
 	// Used as a fallback when /proc/<pid>/cgroup yields no container ID for processes
 	// that share the profiler's cgroup directory (e.g., private cgroup namespace).
 	selfContainerID libpf.String
+}
+
+// runtimeInfo holds the detected language runtime family and full version for a
+// process, used to populate process.runtime.* OTLP resource attributes.
+type runtimeInfo struct {
+	name    string
+	version string
 }
 
 // Mapping represents an executable memory mapping of a process.

@@ -69,12 +69,21 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 
 	if _, exists := (*eventsTree)[key]; !exists {
 		(*eventsTree)[key] = samples.ResourceToProfiles{
-			EnvVars: meta.EnvVars,
-			Events:  make(map[*samples.TypeMetadata]samples.SampleToEvents),
+			EnvVars:        meta.EnvVars,
+			RuntimeName:    meta.RuntimeName,
+			RuntimeVersion: meta.RuntimeVersion,
+			Events:         make(map[*samples.TypeMetadata]samples.SampleToEvents),
 		}
 	}
 
 	rtp := (*eventsTree)[key]
+	// Backfill the runtime version if this resource was first created from an
+	// early sample (before the interpreter attached) that lacked it.
+	if rtp.RuntimeName == "" && meta.RuntimeName != "" {
+		rtp.RuntimeName = meta.RuntimeName
+		rtp.RuntimeVersion = meta.RuntimeVersion
+		(*eventsTree)[key] = rtp
+	}
 	if _, exists := rtp.Events[meta.ProfileType]; !exists {
 		rtp.Events[meta.ProfileType] = make(samples.SampleToEvents)
 	}

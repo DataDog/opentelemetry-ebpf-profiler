@@ -1794,6 +1794,10 @@ func (d *v8Data) String() string {
 	return fmt.Sprintf("V8 %d.%d.%d", (ver>>24)&0xff, (ver>>16)&0xff, ver&0xffff)
 }
 
+func (d *v8Data) RuntimeInfo() (string, string, bool) {
+	return "", "", false
+}
+
 // mapFramePointerOffset converts the frame pointer offset in bytes to eBPF used
 // word offset relative to the number of slots read
 func mapFramePointerOffset(relBytes uint8) uint8 {
