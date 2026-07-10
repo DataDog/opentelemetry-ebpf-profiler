@@ -798,6 +798,84 @@ func (pm *ProcessManager) CleanupPIDs() {
 	}
 }
 
+// ReconcileUSDTProbes performs a periodic re-reconciliation of USDT probes
+// for tracked PIDs that currently have no attachments. This handles the case
+// where a process was first discovered before its USDT-bearing libraries were
+// loaded (e.g., a Java process that loads a native .so via JNA after JVM
+// startup). The batchSize parameter limits how many PIDs are reconciled per
+// call to amortise /proc I/O cost.
+//
+// NOTE: Exported only for tracer.
+func (pm *ProcessManager) ReconcileUSDTProbes(batchSize int) {
+	if pm.usdtManager == nil {
+		return
+	}
+
+	// Collect candidate PIDs: tracked PIDs with no current USDT attachments.
+	pm.mu.RLock()
+	candidates := make([]libpf.PID, 0, min(batchSize, len(pm.pidToProcessInfo)))
+	for pid := range pm.pidToProcessInfo {
+		if len(candidates) >= batchSize {
+			break
+		}
+		// Skip PIDs waiting for exit cleanup.
+		if _, exiting := pm.exitEvents[pid]; exiting {
+			continue
+		}
+		inst := pm.usdtInstances[pid]
+		if inst == nil || inst.NumAttached() == 0 {
+			candidates = append(candidates, pid)
+		}
+	}
+	pm.mu.RUnlock()
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	numAttached := 0
+	for _, pid := range candidates {
+		pr := process.New(pid, pid)
+
+		pm.mu.RLock()
+		prev := pm.usdtInstances[pid]
+		pm.mu.RUnlock()
+
+		inst, err := pm.usdtManager.Reconcile(pid, pr, prev)
+		if err != nil {
+			log.Debugf("USDT periodic reconcile for PID %d: %v", pid, err)
+			continue
+		}
+		if inst == nil {
+			continue
+		}
+
+		// Commit the instance if the PID is still tracked.
+		pm.mu.Lock()
+		_, stillTracked := pm.pidToProcessInfo[pid]
+		if stillTracked {
+			pm.usdtInstances[pid] = inst
+			if inst.NumAttached() > 0 {
+				numAttached++
+			}
+		}
+		pm.mu.Unlock()
+
+		if !stillTracked {
+			go func() {
+				if derr := inst.Detach(); derr != nil {
+					log.Errorf("USDT detach for exited PID %d: %v", pid, derr)
+				}
+			}()
+		}
+	}
+
+	if numAttached > 0 {
+		log.Debugf("USDT periodic reconcile: attached probes for %d new PIDs (of %d candidates)",
+			numAttached, len(candidates))
+	}
+}
+
 // MetaForPID returns the process metadata for given PID.
 func (pm *ProcessManager) MetaForPID(pid libpf.PID) process.ProcessMeta {
 	pm.mu.RLock()

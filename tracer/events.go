@@ -40,6 +40,15 @@ const (
 	// eventReaderDeadline is the timeout for perf event reads. It allows the
 	// reader goroutine to periodically check for context cancellation.
 	eventReaderDeadline = 100 * time.Millisecond
+
+	// usdtReconcileInterval is how often we re-check tracked PIDs that have
+	// no USDT attachments. This catches libraries loaded after initial PID
+	// discovery (e.g., JNA loading a .so with USDT probes after JVM startup).
+	usdtReconcileInterval = 30 * time.Second
+
+	// usdtReconcileBatchSize limits how many PIDs are re-reconciled per tick
+	// to amortise the cost of reading /proc/<pid>/maps.
+	usdtReconcileBatchSize = 20
 )
 
 // StartPIDEventProcessor spawns a goroutine to process PID events.
@@ -51,12 +60,21 @@ func (t *Tracer) StartPIDEventProcessor(ctx context.Context) {
 func (t *Tracer) processPIDEvents(ctx context.Context) {
 	pidCleanupTicker := time.NewTicker(t.intervals.PIDCleanupInterval())
 	defer pidCleanupTicker.Stop()
+
+	// Periodic USDT re-reconciliation catches libraries loaded after initial
+	// PID discovery (e.g., Java JNA loading a .so with USDT probes after JVM
+	// startup). We process a small batch each tick to amortise /proc I/O.
+	usdtReconcileTicker := time.NewTicker(usdtReconcileInterval)
+	defer usdtReconcileTicker.Stop()
+
 	for {
 		select {
 		case pidTid := <-t.pidEvents:
 			t.processManager.SynchronizeProcess(process.New(pidTid.PID(), pidTid.TID()))
 		case <-pidCleanupTicker.C:
 			t.processManager.CleanupPIDs()
+		case <-usdtReconcileTicker.C:
+			t.processManager.ReconcileUSDTProbes(usdtReconcileBatchSize)
 		case <-ctx.Done():
 			return
 		}

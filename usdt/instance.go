@@ -37,6 +37,16 @@ type desiredEntry struct {
 	probe  parsedProbe
 }
 
+// NumAttached returns the number of currently attached probes for this
+// instance. Used by periodic reconciliation to identify PIDs that need
+// re-scanning.
+func (inst *Instance) NumAttached() int {
+	if inst == nil {
+		return 0
+	}
+	return len(inst.attached)
+}
+
 // Reconcile diffs the set of USDT probes desired for `pid` (derived by
 // scanning the executable mappings) against what is currently attached on
 // `inst`, attaches any newly-desired probes, and detaches any that are no
