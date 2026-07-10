@@ -331,6 +331,12 @@ enum {
   // number of bpf_ringbuf_output failures
   metricID_BPFRingbufOutputErr,
 
+  // number of dropped heap alloc entries due to map full
+  metricID_HeapLiveMapFull,
+
+  // number of heap allocs dropped due to per-PID live-heap cap
+  metricID_HeapPerPIDLimitHit,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
@@ -373,6 +379,7 @@ typedef enum TraceOrigin {
   TRACE_OFF_CPU,
   TRACE_PROBE,
   TRACE_HEAP_ALLOC,
+  TRACE_HEAP_FREE,
 } TraceOrigin;
 
 // Maximum number of unique stack deltas needed on a system. This is based on
@@ -637,6 +644,10 @@ typedef struct Trace {
   // value stores context-specific data that was collected with the stack.
   // e.g. time in nanoseconds for off-CPU traces
   u64 value;
+
+  // ptr stores a context-specific pointer collected with the stack.
+  // For TRACE_HEAP_ALLOC / TRACE_HEAP_FREE: the user-visible allocation address.
+  u64 ptr;
 
   // The CPU that captured this trace.
   u32 cpu_id;

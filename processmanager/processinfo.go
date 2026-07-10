@@ -35,6 +35,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
+	"go.opentelemetry.io/ebpf-profiler/usdt"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -483,6 +484,17 @@ func (pm *ProcessManager) processPIDExit(pid libpf.PID) {
 			}
 		}()
 	}
+
+	// Remove live heap tracker entries for this PID and batch-delete the
+	// corresponding entries from the eBPF heap_alloc_live map.
+	if pm.liveHeapTracker != nil {
+		pm.ebpf.SetHeapLivePID(pid, false)
+		pm.ebpf.DeleteHeapPIDAllocCount(pid)
+		ptrs := pm.liveHeapTracker.HandleProcessExit(pid)
+		if len(ptrs) > 0 {
+			go pm.ebpf.DeleteHeapAllocLiveEntries(pid, ptrs)
+		}
+	}
 }
 
 // SynchronizeProcess triggers ProcessManager to update its internal information
@@ -771,6 +783,13 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 						log.Errorf("USDT detach for exited PID %d: %v", pid, derr)
 					}
 				}()
+			} else if pm.liveHeapTracker != nil {
+				// Notify the tracker and eBPF whether this PID supports
+				// live heap (has ddheap:free attached). Without the free
+				// probe, allocs would accumulate forever.
+				hasLive := inst.HasProbeKind(usdt.ProbeHeapFree)
+				pm.liveHeapTracker.SetPIDLiveHeapSupport(pid, hasLive)
+				pm.ebpf.SetHeapLivePID(pid, hasLive)
 			}
 		}
 	}

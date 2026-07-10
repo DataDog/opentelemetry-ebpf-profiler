@@ -12,6 +12,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 )
@@ -96,8 +97,17 @@ func (r *CollectorReporter) reportProfile(ctx context.Context) error {
 			heapStacks, heapSamples, heapValueSum)
 	}
 
+	// Collect inuse snapshot to include in the same export as alloc+cpu.
+	var inuseEntries []liveheap.InuseEntry
+	if r.cfg.LiveHeapTracker != nil {
+		if dropped := r.cfg.LiveHeapTracker.DroppedAllocs(); dropped > 0 {
+			log.Warnf("HEAP_PROFILE_PIPELINE live_heap_dropped_allocs=%d", dropped)
+		}
+		inuseEntries = r.cfg.LiveHeapTracker.Snapshot()
+	}
+
 	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
-		collectionStartTime, collectionEndTime)
+		collectionStartTime, collectionEndTime, inuseEntries, r.cfg.ProcessMetaForInuse)
 	if err != nil {
 		log.Errorf("pdata: %v", err)
 		return nil
@@ -120,5 +130,6 @@ func (r *CollectorReporter) reportProfile(ctx context.Context) error {
 			log.Debugf("HEAP_PROFILE_PIPELINE stage=collector_consume_success heap_samples=%d", heapSamples)
 		}
 	}
+
 	return err
 }

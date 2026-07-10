@@ -18,6 +18,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/orderedset"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
@@ -32,6 +33,8 @@ type profileKind uint8
 const (
 	profileKindDefault profileKind = iota
 	profileKindHeapAllocObjects
+	profileKindHeapInuseSpace
+	profileKindHeapInuseObjects
 )
 
 func sortedSampleKeys(events samples.SampleToEvents) []samples.SampleKey {
@@ -75,6 +78,8 @@ func compareSampleKeys(a, b samples.SampleKey) int {
 func (p *Pdata) Generate(tree samples.TraceEventsTree,
 	agentName, agentVersion string,
 	collectionStartTime, collectionEndTime time.Time,
+	inuseEntries []liveheap.InuseEntry,
+	inuseProcessMeta func(libpf.PID) liveheap.ProcessMeta,
 ) (pprofile.Profiles, error) {
 	profiles := pprofile.NewProfiles()
 	dic := profiles.Dictionary()
@@ -167,6 +172,13 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 			}
 		}
 
+	}
+
+	// Append inuse (live heap) profiles if provided.
+	if len(inuseEntries) > 0 {
+		appendInuseProfiles(profiles, dic, stringSet, funcSet, locationSet, mappingSet, stackSet,
+			agentName, agentVersion, collectionStartTime, collectionEndTime,
+			inuseEntries, inuseProcessMeta)
 	}
 
 	// Populate the ProfilesDictionary tables.

@@ -12,7 +12,9 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
@@ -90,6 +92,19 @@ func (c *Controller) Start(ctx context.Context) error {
 		}
 	}
 
+	// Use the pre-created live heap tracker if provided, otherwise create one.
+	liveTracker := c.config.LiveHeapTracker
+	if liveTracker == nil && c.config.LiveHeapProfiling {
+		liveTracker = liveheap.NewTracker(liveheap.DefaultMaxEntries)
+	}
+	if liveTracker != nil {
+		if setter, ok := c.reporter.(interface {
+			SetLiveHeapTracker(*liveheap.Tracker)
+		}); ok {
+			setter.SetLiveHeapTracker(liveTracker)
+		}
+	}
+
 	// Load the eBPF code and map definitions
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
 		TraceReporter:          c.reporter,
@@ -110,6 +125,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		LoadProbe:              c.config.LoadProbe,
 		HeapProfiling:          c.config.HeapProfiling,
 		LiveHeapProfiling:      c.config.LiveHeapProfiling,
+		LiveHeapTracker:        liveTracker,
 		ExecutableReporter:     c.config.ExecutableReporter,
 		BPFFSRoot:              c.config.BPFFSRoot,
 		OBIProcessCtx:          c.config.OBIProcessCtx,
@@ -119,6 +135,21 @@ func (c *Controller) Start(ctx context.Context) error {
 	}
 	c.tracer = trc
 	log.Info("eBPF tracer loaded")
+
+	// Wire process metadata resolver for inuse profiles now that tracer exists.
+	if liveTracker != nil {
+		if setter, ok := c.reporter.(interface {
+			SetProcessMetaForInuse(func(libpf.PID) liveheap.ProcessMeta)
+		}); ok {
+			setter.SetProcessMetaForInuse(func(pid libpf.PID) liveheap.ProcessMeta {
+				meta := trc.ProcessManager().MetaForPID(pid)
+				return liveheap.ProcessMeta{
+					ExecutablePath: meta.Executable,
+					ContainerID:    meta.ContainerID,
+				}
+			})
+		}
+	}
 
 	now := time.Now()
 

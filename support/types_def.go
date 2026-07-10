@@ -103,6 +103,7 @@ const (
 	TraceOriginOffCPU    = C.TRACE_OFF_CPU
 	TraceOriginProbe     = C.TRACE_PROBE
 	TraceOriginHeapAlloc = C.TRACE_HEAP_ALLOC
+	TraceOriginHeapFree  = C.TRACE_HEAP_FREE
 )
 
 type ApmSpanID C.ApmSpanID

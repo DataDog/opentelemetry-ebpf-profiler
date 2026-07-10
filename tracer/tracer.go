@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/kallsyms"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
@@ -136,6 +137,10 @@ type Tracer struct {
 	// tracks how many were dropped due to invalid UTF-8.
 	customLabels customLabelValidator
 
+	// liveHeapTracker tracks live (in-use) heap allocations by correlating
+	// alloc and free events. Nil when live heap profiling is disabled.
+	liveHeapTracker *liveheap.Tracker
+
 	// done is closed when the tracer encounters an unrecoverable error.
 	// Use Done() to obtain a read-only channel for use in select statements.
 	done     chan libpf.Void
@@ -147,6 +152,11 @@ type Tracer struct {
 // when the tracer should be stopped.
 func (t *Tracer) Done() <-chan libpf.Void {
 	return t.done
+}
+
+// ProcessManager returns the process manager for accessing per-PID metadata.
+func (t *Tracer) ProcessManager() *pm.ProcessManager {
+	return t.processManager
 }
 
 // signalDone closes the done channel to indicate an unrecoverable error.
@@ -201,6 +211,12 @@ type Config struct {
 	// (in-use) heap can be reported, by loading and attaching the heap free
 	// USDT probe alongside the alloc probe. Requires HeapProfiling.
 	LiveHeapProfiling bool
+	// LiveHeapTracker is the shared tracker instance for live heap profiling.
+	// Created externally and shared with the reporter. May be nil.
+	LiveHeapTracker *liveheap.Tracker
+	// LiveHeapMaxEntriesPerPID is the per-process cap on live heap entries
+	// enforced in the eBPF map. 0 means no per-PID limit.
+	LiveHeapMaxEntriesPerPID int
 	// BPFFSRoot is the root path to BPF filesystem for pinned maps and programs.
 	BPFFSRoot string
 	// OBIProcessCtx enable the use of a known shared eBPF map with OBI.
@@ -296,10 +312,12 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		}
 	}
 
+	liveTracker := cfg.LiveHeapTracker
+
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		cfg.Intervals.ExecutableUnloadDelay(), ebpfHandler, cfg.TraceReporter, cfg.ExecutableReporter,
 		elfunwindinfo.NewStackDeltaProvider(),
-		cfg.FilterErrorFrames, cfg.IncludeEnvVars, usdtMgr)
+		cfg.FilterErrorFrames, cfg.IncludeEnvVars, usdtMgr, liveTracker)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}
@@ -320,6 +338,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		samplesPerSecond:       cfg.SamplesPerSecond,
 		probabilisticInterval:  cfg.ProbabilisticInterval,
 		probabilisticThreshold: cfg.ProbabilisticThreshold,
+		liveHeapTracker:        liveTracker,
 		done:                   make(chan libpf.Void),
 	}
 
@@ -1148,6 +1167,7 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 		TID:              libpf.PID(ptr.Tid),
 		Origin:           libpf.Origin(ptr.Origin),
 		Value:            int64(ptr.Value),
+		Ptr:              ptr.Ptr,
 		KTime:            int64(ptr.Ktime),
 		CpuID:            ptr.Cpu_id,
 		EnvVars:          procMeta.EnvVariables,
@@ -1158,6 +1178,7 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 	case support.TraceOriginOffCPU:
 	case support.TraceOriginProbe:
 	case support.TraceOriginHeapAlloc:
+	case support.TraceOriginHeapFree:
 	default:
 		return nil, fmt.Errorf("origin %d: %w", trace.Origin, errOriginUnexpected)
 	}
@@ -1456,7 +1477,29 @@ func (t *Tracer) AttachProbes(probes []string) error {
 }
 
 func (t *Tracer) HandleTrace(bpfTrace *libpf.EbpfTrace) {
-	t.processManager.HandleTrace(bpfTrace)
+	if bpfTrace.Origin == support.TraceOriginHeapFree {
+		// Free events carry no frames — just remove the allocation from the
+		// live tracker. No symbolization or reporting needed.
+		if t.liveHeapTracker != nil {
+			t.liveHeapTracker.HandleFree(bpfTrace.PID, bpfTrace.Ptr)
+		}
+		bpfTrace.KernelFrames = bpfTrace.KernelFrames[0:0]
+		t.tracePool.Put(bpfTrace)
+		return
+	}
+
+	traceHash, frames := t.processManager.HandleTrace(bpfTrace)
+
+	// After symbolization and reporting, feed heap allocs to the live tracker.
+	if bpfTrace.Origin == support.TraceOriginHeapAlloc && t.liveHeapTracker != nil && bpfTrace.Ptr != 0 {
+		t.liveHeapTracker.HandleAlloc(
+			bpfTrace.PID,
+			bpfTrace.Ptr,
+			traceHash,
+			bpfTrace.Value,
+			frames,
+		)
+	}
 
 	// Reclaim the EbpfTrace
 	bpfTrace.KernelFrames = bpfTrace.KernelFrames[0:0]

@@ -47,6 +47,19 @@ func (inst *Instance) NumAttached() int {
 	return len(inst.attached)
 }
 
+// HasProbeKind returns true if a probe of the given kind is currently attached.
+func (inst *Instance) HasProbeKind(kind ProbeKind) bool {
+	if inst == nil {
+		return false
+	}
+	for key := range inst.attached {
+		if key.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // Reconcile diffs the set of USDT probes desired for `pid` (derived by
 // scanning the executable mappings) against what is currently attached on
 // `inst`, attaches any newly-desired probes, and detaches any that are no

@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/collector/consumer/xconsumer"
 	"go.opentelemetry.io/ebpf-profiler/collector/config"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 )
 
@@ -26,6 +27,10 @@ type Config struct {
 	// Either ReporterFactory or Reporter must be set. If both are set, ReporterFactory will be used.
 	ReporterFactory func(cfg *reporter.Config, nextConsumer xconsumer.Profiles) (reporter.Reporter, error)
 	Reporter        reporter.Reporter
+
+	// LiveHeapTracker is passed in when the tracker is created externally
+	// (e.g., by main.go which creates it before both reporter and controller).
+	LiveHeapTracker *liveheap.Tracker
 
 	Fs *flag.FlagSet
 }

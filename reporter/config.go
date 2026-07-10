@@ -8,6 +8,8 @@ import (
 
 	"google.golang.org/grpc"
 
+	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 )
 
@@ -48,4 +50,12 @@ type Config struct {
 	// GRPCDialOptions allows passing additional gRPC dial options when establishing
 	// the connection to the collector. These options are appended after the default options.
 	GRPCDialOptions []grpc.DialOption
+
+	// LiveHeapTracker provides live heap snapshots for inuse profiling.
+	// May be nil if live heap profiling is disabled.
+	LiveHeapTracker *liveheap.Tracker
+
+	// ProcessMetaForInuse resolves PID to metadata for inuse profile resource
+	// attributes. May be nil (resource attrs will be minimal).
+	ProcessMetaForInuse func(libpf.PID) liveheap.ProcessMeta
 }
