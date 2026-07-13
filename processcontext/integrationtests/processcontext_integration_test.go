@@ -137,10 +137,13 @@ func Test_ProcessContext(t *testing.T) {
 					if trace == nil || trace.PID != libpf.PID(cmd.Process.Pid) {
 						continue
 					}
-					if trace.Resource == nil {
+					// The resource is not carried on the eBPF trace; look it up
+					// from the process metadata the same way HandleTrace does.
+					resource := trc.MetaForPID(trace.PID).ProcessContextInfo.Resource
+					if resource == nil {
 						continue
 					}
-					if !resourceMatches(trace.Resource, expectedResource) {
+					if !resourceMatches(resource, expectedResource) {
 						continue
 					}
 					t.Logf("Got expected resource for PID %d", trace.PID)

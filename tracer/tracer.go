@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -1081,7 +1082,6 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 		KTime:            int64(ptr.Ktime),
 		CpuID:            ptr.Cpu_id,
 		EnvVars:          procMeta.EnvVariables,
-		Resource:         procMeta.ProcessContextInfo.Resource,
 	}
 
 	switch trace.Origin {
@@ -1379,6 +1379,13 @@ func (t *Tracer) AttachProbes(probes []string) error {
 		t.hooks[hookPoint{group: probeSpec.Type.String(), name: probeStr}] = probeLink
 	}
 	return nil
+}
+
+// MetaForPID returns the process metadata for the given PID, including the
+// resolved OTel process context. It returns a zero ProcessMeta if the PID is
+// not (or no longer) tracked.
+func (t *Tracer) MetaForPID(pid libpf.PID) process.ProcessMeta {
+	return t.processManager.MetaForPID(pid)
 }
 
 func (t *Tracer) HandleTrace(bpfTrace *libpf.EbpfTrace) {

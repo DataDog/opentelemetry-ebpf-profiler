@@ -333,6 +333,11 @@ func hashFrameCacheKey(fk frameCacheKey) uint32 {
 // later updated to distribute trace handling to goroutine pool, the caching
 // strategy needs to be updated accordingly.
 func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
+	// The OTel process context Resource is not carried on the eBPF trace (that
+	// would couple libpf to the collector pdata types). Re-derive it here from
+	// the process metadata. MetaForPID returns a zero ProcessMeta (nil Resource)
+	// if the PID has already exited, in which case the sample is reported without
+	// resource attributes.
 	meta := &samples.TraceEventMeta{
 		Timestamp:      libpf.UnixTime64(times.KTime(bpfTrace.KTime).UnixNano()),
 		Comm:           bpfTrace.Comm,
@@ -346,7 +351,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 		Origin:         bpfTrace.Origin,
 		Value:          bpfTrace.Value,
 		EnvVars:        bpfTrace.EnvVars,
-		Resource:       bpfTrace.Resource,
+		Resource:       pm.MetaForPID(bpfTrace.PID).ProcessContextInfo.Resource,
 		TraceID:        bpfTrace.APMTraceID,
 		SpanID:         bpfTrace.APMTransactionID,
 	}
