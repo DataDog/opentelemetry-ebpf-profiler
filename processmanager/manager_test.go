@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/hosttrace"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -127,7 +128,7 @@ func TestFrameCacheCrossProcessPollution(t *testing.T) {
 	libcFrame := libpf.NewEbpfFrame(libpf.NativeFrame, 0, 2, uint64(pc))
 	libcFrame[1] = uint64(libcHostFileID)
 
-	pm.HandleTrace(&libpf.EbpfTrace{
+	pm.HandleTrace(&hosttrace.EbpfTrace{
 		PID:       goPID,
 		TID:       goPID,
 		NumFrames: 1,
@@ -142,7 +143,7 @@ func TestFrameCacheCrossProcessPollution(t *testing.T) {
 	assert.Equal(t, libpf.NativeFrame, goFrame.Type)
 	assert.Equal(t, "", goFrame.FunctionName.String())
 
-	pm.HandleTrace(&libpf.EbpfTrace{
+	pm.HandleTrace(&hosttrace.EbpfTrace{
 		PID:       catPID,
 		TID:       catPID,
 		NumFrames: 1,
@@ -192,13 +193,13 @@ func TestFrameCacheSharesNativeFallbackFramesAcrossProcesses(t *testing.T) {
 	nativeFrame := libpf.NewEbpfFrame(libpf.NativeFrame, 0, 2, 0x222a0)
 	nativeFrame[1] = uint64(fileID)
 
-	pm.HandleTrace(&libpf.EbpfTrace{
+	pm.HandleTrace(&hosttrace.EbpfTrace{
 		PID:       firstPID,
 		TID:       firstPID,
 		NumFrames: 1,
 		FrameData: nativeFrame,
 	})
-	pm.HandleTrace(&libpf.EbpfTrace{
+	pm.HandleTrace(&hosttrace.EbpfTrace{
 		PID:       secondPID,
 		TID:       secondPID,
 		NumFrames: 1,

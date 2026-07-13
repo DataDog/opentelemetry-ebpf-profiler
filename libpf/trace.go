@@ -6,7 +6,6 @@ package libpf // import "go.opentelemetry.io/ebpf-profiler/libpf"
 import (
 	"unique"
 
-	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/ebpf-profiler/stringutil"
 )
 
@@ -127,29 +126,6 @@ func (frames *Frames) Append(frame *Frame) {
 type Trace struct {
 	CustomLabels map[String]String
 	Frames       Frames
-}
-
-// EbpfTrace represents a stack trace from Ebpf code.
-type EbpfTrace struct {
-	EnvVars          map[String]String
-	ProcessName      String
-	ExecutablePath   String
-	ContainerID      String
-	CustomLabels     map[String]String
-	Comm             Comm
-	FrameData        []uint64
-	KernelFrames     Frames
-	FrameDataBuf     [3072]uint64
-	Resource         *pcommon.Resource
-	Value            int64
-	KTime            int64
-	CpuID            uint32
-	TID              PID
-	PID              PID
-	NumFrames        uint16
-	Origin           Origin
-	APMTraceID       APMTraceID
-	APMTransactionID APMTransactionID
 }
 
 type EbpfFrame []uint64

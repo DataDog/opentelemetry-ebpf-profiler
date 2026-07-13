@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
+	"go.opentelemetry.io/ebpf-profiler/hosttrace"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -100,7 +101,7 @@ func Test_ProcessContext(t *testing.T) {
 			require.NoError(t, trc.EnableProfiling())
 			require.NoError(t, trc.AttachSchedMonitor())
 
-			traceCh := make(chan *libpf.EbpfTrace)
+			traceCh := make(chan *hosttrace.EbpfTrace)
 			require.NoError(t, trc.StartMapMonitors(ctx, traceCh))
 
 			cmd := exec.CommandContext(ctx, filepath.Join(exeDir, tc.exeName), tc.args...)

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/ebpf-profiler/hosttrace"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
@@ -132,7 +133,7 @@ func TestTracerErrorPropagation(t *testing.T) {
 
 	tr.GetEbpfMaps()["pid_events"] = badMap
 
-	traceChan := make(chan *libpf.EbpfTrace, 16)
+	traceChan := make(chan *hosttrace.EbpfTrace, 16)
 	require.NoError(t, tr.StartMapMonitors(ctx, traceChan))
 	<-tr.Done()
 }
@@ -160,7 +161,7 @@ func TestTracerMapMonitorsError(t *testing.T) {
 	// force error by removing a required map during map monitor start up
 	delete(tr.GetEbpfMaps(), "report_events")
 
-	traceChan := make(chan *libpf.EbpfTrace, 16)
+	traceChan := make(chan *hosttrace.EbpfTrace, 16)
 	require.Error(t, tr.StartMapMonitors(ctx, traceChan))
 }
 
@@ -184,7 +185,7 @@ func TestTraceTransmissionAndParsing(t *testing.T) {
 	require.NoError(t, err)
 	defer tr.Close()
 
-	traceChan := make(chan *libpf.EbpfTrace, 16)
+	traceChan := make(chan *hosttrace.EbpfTrace, 16)
 	err = tr.StartMapMonitors(ctx, traceChan)
 	require.NoError(t, err)
 

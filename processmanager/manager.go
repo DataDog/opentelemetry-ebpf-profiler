@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/hosttrace"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
@@ -287,7 +288,7 @@ func (pm *ProcessManager) convertFrame(pid libpf.PID, ef libpf.EbpfFrame, dst *l
 }
 
 func (pm *ProcessManager) maybeNotifyAPMAgent(
-	rawTrace *libpf.EbpfTrace, trace *libpf.Trace, count uint16,
+	rawTrace *hosttrace.EbpfTrace, trace *libpf.Trace, count uint16,
 ) string {
 	pm.mu.RLock()
 	// Keeping the lock until end of the function is needed because inner map can be modified
@@ -332,7 +333,7 @@ func hashFrameCacheKey(fk frameCacheKey) uint32 {
 // is not re-entrant due to frameCache not being synced. If the tracer is
 // later updated to distribute trace handling to goroutine pool, the caching
 // strategy needs to be updated accordingly.
-func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
+func (pm *ProcessManager) HandleTrace(bpfTrace *hosttrace.EbpfTrace) {
 	meta := &samples.TraceEventMeta{
 		Timestamp:      libpf.UnixTime64(times.KTime(bpfTrace.KTime).UnixNano()),
 		Comm:           bpfTrace.Comm,

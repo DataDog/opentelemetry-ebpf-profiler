@@ -16,8 +16,8 @@ import (
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/ringbuf"
 
+	"go.opentelemetry.io/ebpf-profiler/hosttrace"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/support"
@@ -149,7 +149,7 @@ func startPerfEventMonitor(ctx context.Context, perfEventMap *ebpf.Map,
 //
 // Returns a function that can be called to retrieve ringbuffer error counts.
 func (t *Tracer) startTraceEventMonitor(ctx context.Context,
-	traceOutChan chan<- *libpf.EbpfTrace,
+	traceOutChan chan<- *hosttrace.EbpfTrace,
 ) (func() []metrics.Metric, error) {
 	eventsMap := t.ebpfMaps["trace_events"]
 	eventReader, err := ringbuf.NewReader(eventsMap)

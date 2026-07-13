@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/ebpf-profiler/hosttrace"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -115,7 +115,7 @@ func Test_Golabels(t *testing.T) {
 			require.NoError(t, trc.EnableProfiling())
 			require.NoError(t, trc.AttachSchedMonitor())
 
-			traceCh := make(chan *libpf.EbpfTrace)
+			traceCh := make(chan *hosttrace.EbpfTrace)
 			require.NoError(t, trc.StartMapMonitors(ctx, traceCh))
 
 			wg := sync.WaitGroup{}

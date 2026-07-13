@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 
+	"go.opentelemetry.io/ebpf-profiler/hosttrace"
 	"go.opentelemetry.io/ebpf-profiler/kallsyms"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
@@ -106,7 +107,7 @@ type Tracer struct {
 	// associated eBPF maps.
 	processManager *pm.ProcessManager
 
-	// tracePool is cache of libpf.EbpfTrace to avoid GC pressure
+	// tracePool is cache of hosttrace.EbpfTrace to avoid GC pressure
 	tracePool sync.Pool
 
 	// triggerPIDProcessing is used as manual trigger channel to request immediate
@@ -230,7 +231,7 @@ func schedProcessFreeHookName(progNames libpf.Set[string]) string {
 func newTracePool() sync.Pool {
 	return sync.Pool{
 		New: func() any {
-			return &libpf.EbpfTrace{}
+			return &hosttrace.EbpfTrace{}
 		},
 	}
 }
@@ -1048,7 +1049,7 @@ var (
 )
 
 // loadBpfTrace parses a raw BPF trace into a `host.Trace` instance.
-func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
+func (t *Tracer) loadBpfTrace(raw []byte) (*hosttrace.EbpfTrace, error) {
 	frameListOffs := int(unsafe.Offsetof(support.Trace{}.Frame_data))
 
 	if len(raw) < frameListOffs {
@@ -1066,8 +1067,8 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 
 	pid := libpf.PID(ptr.Pid)
 	procMeta := t.processManager.MetaForPID(pid)
-	trace := t.tracePool.Get().(*libpf.EbpfTrace)
-	*trace = libpf.EbpfTrace{
+	trace := t.tracePool.Get().(*hosttrace.EbpfTrace)
+	*trace = hosttrace.EbpfTrace{
 		Comm:             libpf.NewComm(ptr.Comm),
 		ExecutablePath:   procMeta.Executable,
 		ContainerID:      procMeta.ContainerID,
@@ -1129,7 +1130,8 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 
 // StartMapMonitors starts goroutines for collecting metrics and monitoring eBPF
 // maps for tracepoints, new traces, trace count updates and unknown PCs.
-func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *libpf.EbpfTrace) error {
+func (t *Tracer) StartMapMonitors(ctx context.Context,
+	traceOutChan chan<- *hosttrace.EbpfTrace) error {
 	onlineCPUs, err := onlineCPUsOnce()
 	if err != nil {
 		return fmt.Errorf("failed to get online cpus: %w", err)
@@ -1381,7 +1383,7 @@ func (t *Tracer) AttachProbes(probes []string) error {
 	return nil
 }
 
-func (t *Tracer) HandleTrace(bpfTrace *libpf.EbpfTrace) {
+func (t *Tracer) HandleTrace(bpfTrace *hosttrace.EbpfTrace) {
 	t.processManager.HandleTrace(bpfTrace)
 
 	// Reclaim the EbpfTrace

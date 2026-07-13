@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"unsafe"
 
+	"go.opentelemetry.io/ebpf-profiler/hosttrace"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
@@ -161,7 +162,7 @@ func (i *Instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 
 // NotifyAPMAgent sends out collected traces to the connected APM agent.
 func (i *Instance) NotifyAPMAgent(
-	pid libpf.PID, rawTrace *libpf.EbpfTrace, umTraceHash libpf.TraceHash, count uint16,
+	pid libpf.PID, rawTrace *hosttrace.EbpfTrace, umTraceHash libpf.TraceHash, count uint16,
 ) {
 	if rawTrace.APMTransactionID == libpf.InvalidAPMSpanID || i.socket == nil {
 		return
