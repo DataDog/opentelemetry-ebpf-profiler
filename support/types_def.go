@@ -98,10 +98,12 @@ const (
 )
 
 const (
-	TraceOriginUnknown  = C.TRACE_UNKNOWN
-	TraceOriginSampling = C.TRACE_SAMPLING
-	TraceOriginOffCPU   = C.TRACE_OFF_CPU
-	TraceOriginProbe    = C.TRACE_PROBE
+	TraceOriginUnknown   = C.TRACE_UNKNOWN
+	TraceOriginSampling  = C.TRACE_SAMPLING
+	TraceOriginOffCPU    = C.TRACE_OFF_CPU
+	TraceOriginProbe     = C.TRACE_PROBE
+	TraceOriginHeapAlloc = C.TRACE_HEAP_ALLOC
+	TraceOriginHeapFree  = C.TRACE_HEAP_FREE
 )
 
 type ApmSpanID C.ApmSpanID
@@ -312,4 +314,6 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindNativeErrNoVMA:                       metrics.IDUnwindNativeErrNoVMA,
 	C.metricID_UnwindNativeErrUnsupportedAnonymousMapping: metrics.IDUnwindNativeErrUnsupportedAnonymousMapping,
 	C.metricID_UnwindNativeErrNonExecutableVMA:            metrics.IDUnwindNativeErrNonExecutableVMA,
+	C.metricID_HeapLiveMapFull:                            metrics.IDHeapLiveMapFull,
+	C.metricID_HeapPerPIDLimitHit:                         metrics.IDHeapPerPIDLimitHit,
 }
