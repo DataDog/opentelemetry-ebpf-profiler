@@ -2153,5 +2153,47 @@
     "name": "GoLabelsDroppedInvalidValue",
     "field": "agent.golabels.dropped.invalid_value",
     "id": 294
+  },
+  {
+    "description": "Current number of live heap entries tracked globally",
+    "type": "gauge",
+    "name": "LiveHeapEntries",
+    "field": "agent.liveheap.entries",
+    "id": 295
+  },
+  {
+    "description": "Number of heap alloc samples dropped due to global live-set cap",
+    "type": "counter",
+    "name": "LiveHeapDroppedAllocs",
+    "field": "agent.liveheap.dropped_allocs",
+    "id": 296
+  },
+  {
+    "description": "Number of heap malloc samples received per reporting interval",
+    "type": "counter",
+    "name": "HeapAllocSamples",
+    "field": "agent.heap.alloc_samples",
+    "id": 297
+  },
+  {
+    "description": "Number of heap free samples received per reporting interval",
+    "type": "counter",
+    "name": "HeapFreeSamples",
+    "field": "agent.heap.free_samples",
+    "id": 298
+  },
+  {
+    "description": "Number of heap allocs dropped in eBPF due to per-PID live-heap cap",
+    "type": "counter",
+    "name": "HeapPerPIDLimitHit",
+    "field": "bpf.heap.per_pid_limit_hit",
+    "id": 299
+  },
+  {
+    "description": "Number of heap allocs dropped in eBPF due to global live-heap map full",
+    "type": "counter",
+    "name": "HeapLiveMapFull",
+    "field": "bpf.heap.live_map_full",
+    "id": 300
   }
 ]

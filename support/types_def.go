@@ -311,4 +311,6 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindRubyErrCmeMaxEp:                      metrics.IDUnwindRubyErrCmeMaxEp,
 	C.metricID_UnwindErrBadDTVRead:                        metrics.IDUnwindErrBadDTVRead,
 	C.metricID_BPFRingbufOutputErr:                        metrics.IDBPFRingbufOutputErr,
+	C.metricID_HeapLiveMapFull:                            metrics.IDHeapLiveMapFull,
+	C.metricID_HeapPerPIDLimitHit:                         metrics.IDHeapPerPIDLimitHit,
 }
