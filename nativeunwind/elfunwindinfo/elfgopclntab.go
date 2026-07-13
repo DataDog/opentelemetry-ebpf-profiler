@@ -668,7 +668,7 @@ func getFunctionUnwindInfo(sourceFile string, arch elf.Machine, framePointerReli
 			// is broken across the stack switch. Recover the user goroutine's saved
 			// context and continue FP unwinding there.
 			// Stops when frame pointers are not reliable.
-			if useFP {
+			if framePointerReliable {
 				return &sdtypes.UnwindInfoGoAsmcgocall
 			}
 			return &sdtypes.UnwindInfoStop
