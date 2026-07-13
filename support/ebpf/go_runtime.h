@@ -87,11 +87,7 @@ static inline EBPF_INLINE ErrorCode go_validate_runtime_offsets(GoRuntimeOffsets
 
 // go_runtime_load_ctx reads g, g.m, and the runtime.m prefix into ctx.
 static inline EBPF_INLINE ErrorCode go_runtime_load_ctx(
-  struct GoRuntimeOffsets *offs,
-  UnwindState *state,
-  u8 *scratch,
-  u32 scratch_len,
-  GoRuntimeCtx *ctx)
+  struct GoRuntimeOffsets *offs, UnwindState *state, u8 *scratch, GoRuntimeCtx *ctx)
 {
   ctx->g = go_get_g_ptr(offs, state);
   if (!ctx->g) {
@@ -109,7 +105,7 @@ static inline EBPF_INLINE ErrorCode go_runtime_load_ctx(
   }
 
   u32 prefix_size = offs->curg + sizeof(u64);
-  if (prefix_size > scratch_len) {
+  if (prefix_size > sizeof(((GoUnwindScratchSpace *)0)->buf)) {
     DEBUG_PRINT("go runtime: m prefix size %u exceeds scratch", prefix_size);
     return ERR_GO_RUNTIME_LOAD_FAILURE;
   }
@@ -185,7 +181,7 @@ static inline EBPF_INLINE ErrorCode go_unwind_asmcgocall(PerCPURecord *record, U
   u8 *scratch      = record->goUnwindScratch.buf;
   GoRuntimeCtx ctx = {};
 
-  err = go_runtime_load_ctx(offs, state, scratch, sizeof(record->goUnwindScratch.buf), &ctx);
+  err = go_runtime_load_ctx(offs, state, scratch, &ctx);
   // ctx.g == 0 is a valid nosave path handled in go_asmcgocall_is_nosave.
   if (err != ERR_OK && ctx.g) {
     goto unwind_failure;
