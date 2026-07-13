@@ -104,15 +104,15 @@ static inline EBPF_INLINE ErrorCode go_runtime_load_ctx(
     return ERR_GO_RUNTIME_LOAD_FAILURE;
   }
 
-  u32 prefix_size = offs->curg + sizeof(u64);
-  if (prefix_size > sizeof(((GoUnwindScratchSpace *)0)->buf)) {
-    DEBUG_PRINT("go runtime: m prefix size %u exceeds scratch", prefix_size);
+  const u64 max_off = sizeof(((GoUnwindScratchSpace *)0)->buf) - sizeof(u64);
+  u64 curg          = offs->curg;
+  u64 gsignal       = offs->m_gsignal;
+  if (curg > max_off || gsignal > max_off) {
+    DEBUG_PRINT("go runtime: m offsets exceed scratch");
     return ERR_GO_RUNTIME_LOAD_FAILURE;
   }
-  if (offs->m_gsignal + sizeof(u64) > prefix_size) {
-    DEBUG_PRINT("go runtime: m_gsignal outside m prefix");
-    return ERR_GO_RUNTIME_LOAD_FAILURE;
-  }
+  u64 prefix_size = curg + sizeof(u64);
+
   if (bpf_probe_read_user(scratch, prefix_size, (void *)m_ptr)) {
     DEBUG_PRINT("go runtime: failed to read m prefix");
     return ERR_GO_RUNTIME_LOAD_FAILURE;
@@ -120,8 +120,8 @@ static inline EBPF_INLINE ErrorCode go_runtime_load_ctx(
 
   ctx->m         = m_ptr;
   ctx->m_g0      = *(u64 *)(scratch + 0);
-  ctx->m_gsignal = *(u64 *)(scratch + offs->m_gsignal);
-  ctx->m_curg    = *(u64 *)(scratch + offs->curg);
+  ctx->m_gsignal = *(u64 *)(scratch + gsignal);
+  ctx->m_curg    = *(u64 *)(scratch + curg);
   return ERR_OK;
 }
 
@@ -210,11 +210,13 @@ static inline EBPF_INLINE ErrorCode go_unwind_asmcgocall(PerCPURecord *record, U
   // Post-gosave because g == m.g0 happens after gosave_systemstack_switch switched tls to m.g0.
   // One read to cover:
   //   sizeof(g.m) + sched_bp_off + sizeof(bp).
-  u32 gobuf_read_size = sizeof(u64) + offs->sched_bp_off + sizeof(u64);
-  if (gobuf_read_size > sizeof(record->goUnwindScratch.buf)) {
-    DEBUG_PRINT("asmcgocall: gobuf read size %u exceeds scratch", gobuf_read_size);
+  const u64 max_bp_off = sizeof(record->goUnwindScratch.buf) - 2 * sizeof(u64); // 184
+  u64 bp_off           = offs->sched_bp_off;
+  if (bp_off > max_bp_off) {
+    DEBUG_PRINT("asmcgocall: sched_bp_off exceeds scratch");
     goto unwind_failure;
   }
+  u64 gobuf_read_size = sizeof(u64) + bp_off + sizeof(u64); // <= 200
   if (bpf_probe_read_user(scratch, gobuf_read_size, (void *)(ctx.m_curg + offs->m_offset))) {
     DEBUG_PRINT("asmcgocall: failed to read curg gobuf");
     goto unwind_failure;
@@ -230,7 +232,7 @@ static inline EBPF_INLINE ErrorCode go_unwind_asmcgocall(PerCPURecord *record, U
   // We need to read g.sched that is 8 bytes after g.m.
   u8 *gobuf    = scratch + sizeof(u64);
   u64 saved_sp = *((u64 *)gobuf);
-  u64 saved_bp = *((u64 *)(gobuf + offs->sched_bp_off));
+  u64 saved_bp = *((u64 *)(gobuf + bp_off));
   if (!saved_sp || !saved_bp) {
     DEBUG_PRINT("asmcgocall: gobuf sp/bp not populated");
     goto unwind_failure;
