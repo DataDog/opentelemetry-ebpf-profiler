@@ -60,8 +60,7 @@ type ProcessManager struct {
 
 	// runtimeInfos records the language runtime (name + full version) detected
 	// for each PID, for emission as OTLP process.runtime.* resource attributes.
-	// First interpreter reporting RuntimeInfo(ok=true) wins and is never
-	// overwritten.
+	// The most recently attached interpreter reporting RuntimeInfo(ok=true) wins
 	runtimeInfos map[libpf.PID]runtimeInfo
 
 	// pidToProcessInfo keeps track of the executable memory mappings.
@@ -136,6 +135,9 @@ type ProcessManager struct {
 type runtimeInfo struct {
 	name    string
 	version string
+	// oid identifies the interpreter DSO that reported this runtime, so the
+	// entry can be dropped when that specific interpreter detaches
+	oid util.OnDiskFileIdentifier
 }
 
 // Mapping represents an executable memory mapping of a process.

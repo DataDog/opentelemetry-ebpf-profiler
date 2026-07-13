@@ -230,4 +230,19 @@ func TestReportTraceEventRuntimeBackfill(t *testing.T) {
 	name, version = resourceRuntime()
 	assert.Equal(t, "cpython", name)
 	assert.Equal(t, "3.11.4", version)
+
+	// The process switches interpreter/version under the same resource bucket
+	// (e.g. exec into a different version): the runtime should be refreshed.
+	require.NoError(t, reporter.ReportTraceEvent(trace,
+		baseMeta(now.Add(2*time.Second), "cpython", "3.12.0")))
+	name, version = resourceRuntime()
+	assert.Equal(t, "cpython", name)
+	assert.Equal(t, "3.12.0", version)
+
+	// A later sample that lacks a runtime doesn't clobber the known runtime.
+	require.NoError(t, reporter.ReportTraceEvent(trace,
+		baseMeta(now.Add(3*time.Second), "", "")))
+	name, version = resourceRuntime()
+	assert.Equal(t, "cpython", name)
+	assert.Equal(t, "3.12.0", version)
 }

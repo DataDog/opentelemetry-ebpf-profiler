@@ -77,9 +77,10 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 	}
 
 	rtp := (*eventsTree)[key]
-	// Backfill the runtime version if this resource was first created from an
-	// early sample (before the interpreter attached) that lacked it.
-	if rtp.RuntimeName == "" && meta.RuntimeName != "" {
+	// Keep the resource's runtime in step with the interpreter currently
+	// attached to the process
+	if meta.RuntimeName != "" &&
+		(rtp.RuntimeName != meta.RuntimeName || rtp.RuntimeVersion != meta.RuntimeVersion) {
 		rtp.RuntimeName = meta.RuntimeName
 		rtp.RuntimeVersion = meta.RuntimeVersion
 		(*eventsTree)[key] = rtp

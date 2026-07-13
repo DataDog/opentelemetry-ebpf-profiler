@@ -215,12 +215,10 @@ func (pm *ProcessManager) handleNewInterpreter(pr process.Process, bias libpf.Ad
 	log.Debugf("Attached to %v interpreter in PID %v", data, pid)
 	pm.assignInterpreter(pid, oid, instance)
 
-	// Record the runtime version for OTLP process.runtime.* emission. First
-	// interpreter reporting a runtime wins
-	if _, exists := pm.runtimeInfos[pid]; !exists {
-		if name, version, ok := data.RuntimeInfo(); ok {
-			pm.runtimeInfos[pid] = runtimeInfo{name: name, version: version}
-		}
+	// Record the runtime version for OTLP process.runtime.* emission. The most recently
+	// attached interpreter reporting a runtime wins
+	if name, version, ok := data.RuntimeInfo(); ok {
+		pm.runtimeInfos[pid] = runtimeInfo{name: name, version: version, oid: oid}
 	}
 
 	if libcInfo := pm.getLibcInfo(pid); libcInfo != nil {
@@ -367,6 +365,13 @@ func (pm *ProcessManager) processRemovedInterpreters(pid libpf.PID,
 				pid, err)
 		}
 		delete(pm.interpreters[pid], key)
+		// Drop the runtime info if it came from the interpreter being detached,
+		// so an exec into a different interpreter/version doesn't keep emitting
+		// the previous runtime. A concurrently or subsequently attached
+		// interpreter has already repopulated it under its own oid.
+		if ri, ok := pm.runtimeInfos[pid]; ok && ri.oid == key {
+			delete(pm.runtimeInfos, pid)
+		}
 	}
 
 	if len(pm.interpreters[pid]) == 0 {
