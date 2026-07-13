@@ -73,8 +73,7 @@ impl<'obj> GoRuntimeInfo<'obj> {
         // available from the header or is 0.
         let text_start = match offsets.text_start {
             Some(start) if start != 0 => start,
-            _ => obj
-                .load_section(b".text")?
+            _ => obj.load_section(b".text")?
                 .ok_or(Error::CodeSectionNotFound)?
                 .virt_addr(),
         };

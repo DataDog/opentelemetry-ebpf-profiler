@@ -12,7 +12,7 @@
 //
 // These programs are attached PID-scoped from userspace by the `usdt`
 // package once per (process, probe site) discovered via .note.stapsdt
-// scanning. See usdt/wiring.go for the attachment flow.
+// scanning. See usdt.Manager/usdt.Instance for the attachment flow.
 //
 // v1 reads arguments directly out of pt_regs using the architecture-specific
 // register layout defined in kernel.h, matching the fixed tracepoint signatures
