@@ -1445,6 +1445,14 @@ func (t *Tracer) AttachProbes(probes []string) error {
 }
 
 func (t *Tracer) HandleTrace(bpfTrace *libpf.EbpfTrace) {
+	// Free events are consumed by the live heap tracker, not the
+	// reporter's alloc-profile pipeline. Nothing to record here.
+	if bpfTrace.Origin == support.TraceOriginHeapFree {
+		bpfTrace.KernelFrames = bpfTrace.KernelFrames[0:0]
+		t.tracePool.Put(bpfTrace)
+		return
+	}
+
 	t.processManager.HandleTrace(bpfTrace, profileTypeForOrigin(bpfTrace.Origin))
 
 	// Reclaim the EbpfTrace
@@ -1463,6 +1471,8 @@ func profileTypeForOrigin(origin libpf.Origin) *samples.TypeMetadata {
 		return profileTypeOffCPU
 	case support.TraceOriginProbe:
 		return profileTypeProbe
+	case support.TraceOriginHeapAlloc:
+		return profileTypeHeapAlloc
 	default:
 		return nil
 	}
@@ -1484,5 +1494,10 @@ var (
 	profileTypeProbe = &samples.TypeMetadata{
 		SampleType: "events",
 		SampleUnit: "count",
+	}
+	profileTypeHeapAlloc = &samples.TypeMetadata{
+		SampleType:   "alloc_space",
+		SampleUnit:   "bytes",
+		ReportValues: true,
 	}
 )

@@ -396,6 +396,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 		ContainerID:    bpfTrace.ContainerID,
 		ProfileType:    profileType,
 		Value:          bpfTrace.Value,
+		AllocSize:      int64(bpfTrace.Size),
 		EnvVars:        bpfTrace.EnvVars,
 		TraceID:        bpfTrace.APMTraceID,
 		SpanID:         bpfTrace.APMTransactionID,

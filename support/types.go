@@ -504,8 +504,6 @@ var MetricsTranslation = []metrics.MetricID{
 	0x67: metrics.IDUnwindRubyErrCmeMaxEp,
 	0x68: metrics.IDUnwindErrBadDTVRead,
 	0x69: metrics.IDBPFRingbufOutputErr,
-<<<<<<< conflict 2 of 2
-+++++++ owzprlqm 046201ff "feat: add USDT discovery, parsing, and attach mechanism" (rebased revision)
 	0x6a: metrics.IDUnwindNativeErrNoVMA,
 	0x6b: metrics.IDUnwindNativeErrUnsupportedAnonymousMapping,
 	0x6c: metrics.IDUnwindNativeErrNonExecutableVMA,
