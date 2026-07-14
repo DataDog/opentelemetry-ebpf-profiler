@@ -41,12 +41,13 @@ const (
 	// reader goroutine to periodically check for context cancellation.
 	eventReaderDeadline = 100 * time.Millisecond
 
-	// usdtReconcileInterval is how often we sweep tracked PIDs with no
-	// current USDT attachments, to catch libraries dlopen'd after the
-	// process was first seen.
+	// usdtReconcileInterval is how often we re-check tracked PIDs that have
+	// no USDT attachments. This catches libraries loaded after initial PID
+	// discovery (e.g., JNA loading a .so with USDT probes after JVM startup).
 	usdtReconcileInterval = 30 * time.Second
-	// usdtReconcileBatchSize limits how many PIDs are reconciled per sweep,
-	// to amortise the /proc I/O cost across ticks.
+
+	// usdtReconcileBatchSize limits how many PIDs are re-reconciled per tick
+	// to amortise the cost of reading /proc/<pid>/maps.
 	usdtReconcileBatchSize = 20
 )
 
@@ -62,6 +63,13 @@ func (t *Tracer) processPIDEvents(ctx context.Context) {
 	pidCleanupTicker := time.NewTicker(t.intervals.PIDCleanupInterval())
 	defer pidCleanupTicker.Stop()
 
+	// Periodic USDT re-reconciliation catches libraries loaded after initial
+	// PID discovery (e.g., Java JNA loading a .so with USDT probes after JVM
+	// startup). We process a small batch each tick to amortise /proc I/O.
+	// Note: this only re-sweeps USDT attachment state, not the general
+	// executable-mapping cache (see the longstanding periodic-sync TODO on
+	// ProcessManager.SynchronizeProcess, which predates and is unrelated to
+	// USDT/memory profiling).
 	usdtReconcileTicker := time.NewTicker(usdtReconcileInterval)
 	defer usdtReconcileTicker.Stop()
 
@@ -249,10 +257,13 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 				case errors.Is(err, errOriginUnexpected):
 					log.Warnf("skip trace handling: %v", err)
 					continue
-				case errors.Is(err, errRecordTooSmall), errors.Is(err, errRecordUnexpectedSize):
+				case errors.Is(err, errRecordTooSmall):
 					log.Errorf("Stop receiving traces: %v", err)
 					t.signalDone()
 					return
+				case errors.Is(err, errRecordUnexpectedSize):
+					log.Warnf("skip trace with unexpected record size: %v", err)
+					continue
 				default:
 					log.Warnf("unexpected error handling trace: %v", err)
 					continue

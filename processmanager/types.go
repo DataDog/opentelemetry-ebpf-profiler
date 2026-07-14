@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
@@ -141,6 +142,12 @@ type ProcessManager struct {
 	// cleanupSem bounds the number of concurrent background cleanups so that
 	// heavy process churn cannot spawn unbounded concurrent kernel work.
 	cleanupSem chan struct{}
+
+	// liveHeapTracker tracks live allocations for inuse heap profiling.
+	// May be nil if live heap profiling is disabled. On process exit, the
+	// process manager removes entries for the dead PID and batch-deletes
+	// the corresponding eBPF map entries.
+	liveHeapTracker *liveheap.Tracker
 }
 
 // Mapping represents an executable memory mapping of a process.

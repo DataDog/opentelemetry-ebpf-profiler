@@ -681,11 +681,23 @@ const (
 	IDUnwindNativeErrNonExecutableVMA = 297
 
 	// Number of heap allocs dropped in eBPF due to per-PID live-heap cap
-	IDHeapPerPIDLimitHit = 299
+	IDHeapPerPIDLimitHit = 298
 
 	// Number of heap allocs dropped in eBPF due to global live-heap map full
-	IDHeapLiveMapFull = 300
+	IDHeapLiveMapFull = 299
+
+	// Current number of live heap entries tracked globally
+	IDLiveHeapEntries = 300
+
+	// Number of heap alloc samples dropped due to global live-set cap
+	IDLiveHeapDroppedAllocs = 301
+
+	// Number of heap malloc samples received per reporting interval
+	IDHeapAllocSamples = 302
+
+	// Number of heap free samples received per reporting interval
+	IDHeapFreeSamples = 303
 
 	// max number of ID values, keep this as *last entry*
-	IDMax = 301
+	IDMax = 304
 )

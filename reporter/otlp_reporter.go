@@ -17,6 +17,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 )
@@ -121,8 +122,14 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 	r.collectionStartTime = collectionEndTime
 	r.traceEvents.WUnlock(&traceEventsPtr)
 
+	// Collect inuse snapshot to include in the same export as alloc+cpu.
+	var inuseEntries []liveheap.InuseEntry
+	if r.cfg.LiveHeapTracker != nil {
+		inuseEntries = r.cfg.LiveHeapTracker.Snapshot()
+	}
+
 	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
-		collectionStartTime, collectionEndTime)
+		collectionStartTime, collectionEndTime, inuseEntries, r.cfg.ProcessMetaForInuse)
 	if err != nil {
 		log.Errorf("pdata: %v", err)
 		return nil

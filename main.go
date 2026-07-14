@@ -19,6 +19,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
@@ -114,6 +115,12 @@ func mainWithExitCode() exitCode {
 
 	metrics.Start(noop.Meter{})
 
+	// Create live heap tracker if enabled, shared between reporter and tracer.
+	var liveTracker *liveheap.Tracker
+	if cfg.LiveHeapProfiling {
+		liveTracker = liveheap.NewTracker(liveheap.DefaultMaxEntries)
+	}
+
 	rep, err := reporter.NewOTLP(&reporter.Config{
 		Name:                   os.Args[0],
 		Version:                version,
@@ -127,12 +134,14 @@ func mainWithExitCode() exitCode {
 		ReportInterval:         intervals.ReportInterval(),
 		ReportJitter:           cfg.ReporterJitter,
 		SamplesPerSecond:       cfg.SamplesPerSecond,
+		LiveHeapTracker:        liveTracker,
 	})
 	if err != nil {
 		log.Error(err)
 		return exitFailure
 	}
 	cfg.Reporter = rep
+	cfg.LiveHeapTracker = liveTracker
 
 	log.Infof("Starting OTEL profiling agent %s", version)
 

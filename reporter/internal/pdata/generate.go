@@ -19,6 +19,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/orderedset"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 )
@@ -39,6 +40,8 @@ type profileKind uint8
 const (
 	profileKindDefault profileKind = iota
 	profileKindHeapAllocObjects
+	profileKindHeapInuseSpace
+	profileKindHeapInuseObjects
 )
 
 // sampleKeys returns the sample keys of events. When sortKeys is true the
@@ -99,6 +102,8 @@ func compareSampleKeys(a, b samples.SampleKey) int {
 func (p *Pdata) Generate(tree samples.TraceEventsTree,
 	agentName, agentVersion string,
 	collectionStartTime, collectionEndTime time.Time,
+	inuseEntries []liveheap.InuseEntry,
+	inuseProcessMeta func(libpf.PID) liveheap.ProcessMeta,
 ) (pprofile.Profiles, error) {
 	profiles := pprofile.NewProfiles()
 	dic := profiles.Dictionary()
@@ -210,6 +215,13 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 			}
 		}
 
+	}
+
+	// Append inuse (live heap) profiles if provided.
+	if len(inuseEntries) > 0 {
+		appendInuseProfiles(profiles, dic, attrMgr, stringSet, funcSet, locationSet, mappingSet, stackSet,
+			agentName, agentVersion, collectionStartTime, collectionEndTime,
+			inuseEntries, inuseProcessMeta)
 	}
 
 	// Populate the ProfilesDictionary tables.
@@ -327,78 +339,8 @@ func (p *Pdata) setProfile(
 			sample.SetLinkIndex(link)
 		}
 
-		locationIndices := make([]int32, 0, len(traceInfo.Frames))
-		// Walk every frame of the trace.
-		for _, uniqueFrame := range traceInfo.Frames {
-			frame := uniqueFrame.Value()
-			locInfo := locationInfo{
-				address:   uint64(frame.AddressOrLineno),
-				frameType: frame.Type,
-			}
-
-			index, ok := mappingSet.AddWithCheck(frame.Mapping)
-			if !ok {
-				m := frame.Mapping.Value()
-				mf := m.File.Value()
-
-				mapping := dic.MappingTable().AppendEmpty()
-				mapping.SetMemoryStart(uint64(m.Start))
-				mapping.SetMemoryLimit(uint64(m.End))
-				mapping.SetFileOffset(m.FileOffset)
-				mapping.SetFilenameStrindex(stringSet.Add(mf.FileName.String()))
-
-				attrMgr.AppendOptionalString(mapping.AttributeIndices(),
-					semconv.ProcessExecutableBuildIDGNUKey,
-					mf.GnuBuildID)
-				attrMgr.AppendOptionalString(mapping.AttributeIndices(),
-					semconv.ProcessExecutableBuildIDGoKey,
-					mf.GoBuildID)
-				attrMgr.AppendOptionalString(mapping.AttributeIndices(),
-					semconv.ProcessExecutableBuildIDHtlhashKey,
-					mf.FileID.StringNoQuotes())
-			}
-			locInfo.mappingIndex = index
-
-			if frame.FunctionName != libpf.NullString || frame.SourceFile != libpf.NullString {
-				// Store interpreted frame information as a Line message
-				locInfo.hasLine = true
-				locInfo.lineNumber = int64(frame.SourceLine)
-				locInfo.columnNumber = int64(frame.SourceColumn)
-				fi := funcInfo{
-					nameIdx:     stringSet.Add(frame.FunctionName.String()),
-					fileNameIdx: stringSet.Add(frame.SourceFile.String()),
-				}
-				locInfo.functionIndex = funcSet.Add(fi)
-			}
-
-			idx, exists := locationSet.AddWithCheck(locInfo)
-			if !exists {
-				// Add a new Location to the dictionary
-				loc := dic.LocationTable().AppendEmpty()
-				loc.SetAddress(locInfo.address)
-				loc.SetMappingIndex(locInfo.mappingIndex)
-				if locInfo.hasLine {
-					line := loc.Lines().AppendEmpty()
-					line.SetLine(locInfo.lineNumber)
-					line.SetColumn(locInfo.columnNumber)
-					line.SetFunctionIndex(locInfo.functionIndex)
-				}
-				attrMgr.AppendOptionalString(loc.AttributeIndices(),
-					semconv.ProfileFrameTypeKey, locInfo.frameType.String())
-			}
-			locationIndices = append(locationIndices, idx)
-		} // End per-frame processing
-
-		stackIdx, exists := stackSet.AddWithCheck(stackInfo{
-			locationIndicesHash: hashLocationIndices(locationIndices),
-		})
-		if !exists {
-			// Add a new Stack to the dictionary
-			stack := dic.StackTable().AppendEmpty()
-			for _, locIdx := range locationIndices {
-				stack.LocationIndices().Append(locIdx)
-			}
-		}
+		stackIdx := appendFramesAsStack(traceInfo.Frames, dic, attrMgr,
+			stringSet, funcSet, mappingSet, locationSet, stackSet)
 		sample.SetStackIndex(stackIdx)
 
 		for key, value := range traceInfo.Labels {

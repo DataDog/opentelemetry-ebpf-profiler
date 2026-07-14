@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
@@ -30,6 +31,7 @@ import (
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
@@ -75,6 +77,7 @@ type Config struct {
 	FilterErrorFrames     bool
 	IncludeEnvVars        libpf.Set[string]
 	UsdtManager           *usdt.Manager
+	LiveHeapTracker       *liveheap.Tracker
 }
 
 // New creates a new ProcessManager which is responsible for keeping track of loading
@@ -137,6 +140,7 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 		usdtManager:              cfg.UsdtManager,
 		usdtInstances:            make(map[libpf.PID]*usdt.Instance),
 		cleanupSem:               make(chan struct{}, maxConcurrentPIDCleanups),
+		liveHeapTracker:          cfg.LiveHeapTracker,
 	}
 
 	collectInterpreterMetrics(ctx, pm, cfg.MonitorInterval)
@@ -205,6 +209,10 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 
 		summary.Add(dotnet.GetAndResetMetrics())
 		summary.Add(pm.ebpf.CollectMetrics())
+
+		if pm.liveHeapTracker != nil {
+			summary.Add(pm.liveHeapTracker.GetAndResetMetrics())
+		}
 
 		pm.eim.UpdateMetricSummary(summary)
 		pm.metricsAddSlice(metricSummaryToSlice(summary))
@@ -383,7 +391,8 @@ func hashFrameCacheKey(fk frameCacheKey) uint32 {
 // is not re-entrant due to frameCache not being synced. If the tracer is
 // later updated to distribute trace handling to goroutine pool, the caching
 // strategy needs to be updated accordingly.
-func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *samples.TypeMetadata) {
+// Returns the trace hash (zero if not a heap alloc) and symbolized frames.
+func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *samples.TypeMetadata) (libpf.TraceHash, libpf.Frames) {
 	meta := &samples.TraceEventMeta{
 		Timestamp:      libpf.UnixTime64(times.KTime(bpfTrace.KTime).UnixNano()),
 		Comm:           bpfTrace.Comm,
@@ -463,4 +472,12 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {
 		log.Errorf("Failed to report trace event: %v", err)
 	}
+
+	// Only compute the trace hash for heap allocs (needed by the live tracker).
+	// This avoids the cost of hashing on the much hotter CPU/off-CPU paths.
+	var traceHash libpf.TraceHash
+	if bpfTrace.Origin == support.TraceOriginHeapAlloc {
+		traceHash = traceutil.HashTrace(trace)
+	}
+	return traceHash, trace.Frames
 }

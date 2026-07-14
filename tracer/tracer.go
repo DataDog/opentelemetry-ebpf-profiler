@@ -34,6 +34,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/kallsyms"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
@@ -143,6 +144,10 @@ type Tracer struct {
 	// to complete before tearing down the ProcessManager.
 	pidEventsDone chan struct{}
 
+	// liveHeapTracker tracks live (in-use) heap allocations by correlating
+	// alloc and free events. Nil when live heap profiling is disabled.
+	liveHeapTracker *liveheap.Tracker
+
 	// done is closed when the tracer encounters an unrecoverable error.
 	// Use Done() to obtain a read-only channel for use in select statements.
 	done     chan libpf.Void
@@ -154,6 +159,11 @@ type Tracer struct {
 // when the tracer should be stopped.
 func (t *Tracer) Done() <-chan libpf.Void {
 	return t.done
+}
+
+// ProcessManager returns the process manager for accessing per-PID metadata.
+func (t *Tracer) ProcessManager() *pm.ProcessManager {
+	return t.processManager
 }
 
 // signalDone closes the done channel to indicate an unrecoverable error.
@@ -206,6 +216,16 @@ type Config struct {
 	// HeapProfiling enables loading of the heap USDT uprobe entry programs
 	// and per-process attach via the usdt package.
 	HeapProfiling bool
+	// LiveHeapProfiling additionally tracks deallocations so the live
+	// (in-use) heap can be reported, by loading and attaching the heap free
+	// USDT probe alongside the alloc probe. Requires HeapProfiling.
+	LiveHeapProfiling bool
+	// LiveHeapTracker is the shared tracker instance for live heap profiling.
+	// Created externally and shared with the reporter. May be nil.
+	LiveHeapTracker *liveheap.Tracker
+	// LiveHeapMaxEntriesPerPID is the per-process cap on live heap entries
+	// enforced in the eBPF map. 0 means no per-PID limit.
+	LiveHeapMaxEntriesPerPID int
 	// BPFFSRoot is the root path to BPF filesystem for pinned maps and programs.
 	BPFFSRoot string
 	// OBIProcessCtx enable the use of a known shared eBPF map with OBI.
@@ -249,6 +269,10 @@ func newTracePool() sync.Pool {
 
 // NewTracer loads eBPF code and map definitions from the ELF module at the configured path.
 func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
+	if cfg.LiveHeapProfiling && !cfg.HeapProfiling {
+		return nil, errors.New("live heap profiling requires heap profiling to be enabled")
+	}
+
 	kernelSymbolizer, err := kallsyms.NewSymbolizer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read kernel symbols: %v", err)
@@ -270,6 +294,10 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		return nil, fmt.Errorf("failed to load eBPF maps: %v", err)
 	}
 
+	if cfg.LiveHeapMaxEntriesPerPID > 0 {
+		ebpfHandler.SetHeapPIDAllocLimit(uint32(cfg.LiveHeapMaxEntriesPerPID))
+	}
+
 	// Set up memory profiling.
 	var usdtMgr *usdt.Manager
 	if cfg.HeapProfiling {
@@ -277,7 +305,10 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		if p, ok := ebpfProgs["uprobe_heap_alloc"]; ok {
 			usdtProgs[usdt.ProbeHeapAlloc] = p
 		}
-		if p, ok := ebpfProgs["uprobe_heap_free"]; ok {
+		// Only register the free probe when live heap profiling is opted
+		// into; without it the program is not loaded and frees are never
+		// instrumented.
+		if p, ok := ebpfProgs["uprobe_heap_free"]; ok && cfg.LiveHeapProfiling {
 			usdtProgs[usdt.ProbeHeapFree] = p
 		}
 		if usdtMgr, err = usdt.NewManager(usdtProgs); err != nil {
@@ -297,6 +328,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		FilterErrorFrames:     cfg.FilterErrorFrames,
 		IncludeEnvVars:        cfg.IncludeEnvVars,
 		UsdtManager:           usdtMgr,
+		LiveHeapTracker:       cfg.LiveHeapTracker,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
@@ -319,6 +351,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		probabilisticInterval:  cfg.ProbabilisticInterval,
 		probabilisticThreshold: cfg.ProbabilisticThreshold,
 		pidEventsDone:          make(chan struct{}),
+		liveHeapTracker:        cfg.LiveHeapTracker,
 		done:                   make(chan libpf.Void),
 	}
 
@@ -543,9 +576,12 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		// USDT entry points for heap profiling. Attached PID-scoped from
 		// userspace by the usdt package; they themselves tail-call into
 		// the shared uprobe unwinder chain loaded above.
+		// The free probe is only needed to track deallocations for live
+		// (in-use) heap reporting; plain allocation profiling never
+		// consumes free events, so don't load it unless opted in.
 		heapProgs := []progLoaderHelper{
 			{name: "uprobe_heap_alloc", noTailCallTarget: true, enable: true},
-			{name: "uprobe_heap_free", noTailCallTarget: true, enable: true},
+			{name: "uprobe_heap_free", noTailCallTarget: true, enable: cfg.LiveHeapProfiling},
 		}
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], heapProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
@@ -1445,15 +1481,32 @@ func (t *Tracer) AttachProbes(probes []string) error {
 }
 
 func (t *Tracer) HandleTrace(bpfTrace *libpf.EbpfTrace) {
-	// Free events are consumed by the live heap tracker, not the
-	// reporter's alloc-profile pipeline. Nothing to record here.
 	if bpfTrace.Origin == support.TraceOriginHeapFree {
+		// Free events carry no frames; just remove the allocation from the
+		// live tracker. No symbolization or reporting needed.
+		if t.liveHeapTracker != nil {
+			t.liveHeapTracker.HandleFree(bpfTrace.PID, bpfTrace.Ptr)
+		}
 		bpfTrace.KernelFrames = bpfTrace.KernelFrames[0:0]
 		t.tracePool.Put(bpfTrace)
 		return
 	}
 
-	t.processManager.HandleTrace(bpfTrace, profileTypeForOrigin(bpfTrace.Origin))
+	traceHash, frames := t.processManager.HandleTrace(bpfTrace, profileTypeForOrigin(bpfTrace.Origin))
+
+	// After symbolization and reporting, feed heap allocs to the live tracker.
+	// Called for every alloc trace (not just ptr != 0) so the tracker can count
+	// all received alloc samples; it ignores the ones eBPF didn't live-track
+	// (ptr == 0). This mirrors the unconditional HandleFree call above.
+	if bpfTrace.Origin == support.TraceOriginHeapAlloc && t.liveHeapTracker != nil {
+		t.liveHeapTracker.HandleAlloc(
+			bpfTrace.PID,
+			bpfTrace.Ptr,
+			traceHash,
+			bpfTrace.Value,
+			frames,
+		)
+	}
 
 	// Reclaim the EbpfTrace
 	bpfTrace.KernelFrames = bpfTrace.KernelFrames[0:0]

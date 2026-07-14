@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
+	"go.opentelemetry.io/ebpf-profiler/liveheap"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
@@ -42,8 +43,37 @@ type baseReporter struct {
 
 var errUnknownProfileType = errors.New("unknown trace profile type")
 
+// SetLiveHeapTracker sets the live heap tracker for inuse profile reporting.
+// Must be called before Start().
+func (b *baseReporter) SetLiveHeapTracker(t *liveheap.Tracker) {
+	b.cfg.LiveHeapTracker = t
+}
+
+// SetProcessMetaForInuse sets the process metadata resolver for inuse profiles.
+func (b *baseReporter) SetProcessMetaForInuse(fn func(libpf.PID) liveheap.ProcessMeta) {
+	b.cfg.ProcessMetaForInuse = fn
+}
+
 func (b *baseReporter) Stop() {
 	b.runLoop.Stop()
+}
+
+func countHeapProfileEvents(tree samples.TraceEventsTree) (stacks, samplesCount int, valueSum int64) {
+	for _, resource := range tree {
+		for profileType, sampleEvents := range resource.Events {
+			if profileType.SampleType != "alloc_space" {
+				continue
+			}
+			for _, events := range sampleEvents {
+				stacks++
+				samplesCount += len(events.Timestamps)
+				for _, value := range events.Values {
+					valueSum += value
+				}
+			}
+		}
+	}
+	return stacks, samplesCount, valueSum
 }
 
 func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error {
