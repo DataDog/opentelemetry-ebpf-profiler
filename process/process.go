@@ -98,6 +98,10 @@ func (sp *systemProcess) PID() libpf.PID {
 	return sp.pid
 }
 
+func (sp *systemProcess) TID() libpf.PID {
+	return sp.tid
+}
+
 func (sp *systemProcess) GetMachineData() MachineData {
 	return MachineData{Machine: pfelf.CurrentMachine}
 }

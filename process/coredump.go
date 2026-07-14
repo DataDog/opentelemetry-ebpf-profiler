@@ -198,6 +198,12 @@ func (cd *CoredumpProcess) PID() libpf.PID {
 	return cd.pid
 }
 
+// TID implements the Process interface. Coredumps have no thread context;
+// returns PID.
+func (cd *CoredumpProcess) TID() libpf.PID {
+	return cd.pid
+}
+
 // GetMachineData implements the Process interface.
 func (cd *CoredumpProcess) GetMachineData() MachineData {
 	return cd.machineData

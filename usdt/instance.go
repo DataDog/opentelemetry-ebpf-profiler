@@ -46,6 +46,14 @@ type desiredEntry struct {
 	probe  parsedProbe
 }
 
+// NewInstance creates an empty Instance for the given PID. Callers should
+// store the returned Instance in usdtInstances under pm.mu before calling
+// Reconcile, so that concurrent reconcile paths share one object and
+// serialize via Instance.mu.
+func NewInstance(pid libpf.PID) *Instance {
+	return &Instance{pid: pid, attached: make(map[ProbeKey]AttachedProbe)}
+}
+
 // NumAttached returns the number of currently attached probes for this
 // instance. Used by periodic reconciliation to identify PIDs that need
 // re-scanning.
@@ -91,7 +99,7 @@ func (m *Manager) Reconcile(
 	inst *Instance,
 ) (*Instance, error) {
 	if inst == nil {
-		inst = &Instance{pid: pid, attached: make(map[ProbeKey]AttachedProbe)}
+		inst = NewInstance(pid)
 	}
 
 	// Build the desired set by scanning every executable file-backed

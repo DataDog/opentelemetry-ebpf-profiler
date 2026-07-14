@@ -33,6 +33,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
+	"go.opentelemetry.io/ebpf-profiler/usdt"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -45,6 +46,11 @@ const (
 
 	// DefaultFrameCacheSize is the default maximum size of the LRU cache for frames.
 	DefaultFrameCacheSize uint32 = 16384
+
+	// maxConcurrentPIDCleanups bounds the number of background per-PID cleanup
+	// operations (USDT detach, eBPF map deletes) that run concurrently, so
+	// process churn cannot spawn unbounded concurrent kernel work.
+	maxConcurrentPIDCleanups = 16
 )
 
 // dummyPrefix is the LPM prefix installed to indicate the process is known
@@ -68,6 +74,7 @@ type Config struct {
 	FrameCacheSize        uint32
 	FilterErrorFrames     bool
 	IncludeEnvVars        libpf.Set[string]
+	UsdtManager           *usdt.Manager
 }
 
 // New creates a new ProcessManager which is responsible for keeping track of loading
@@ -127,6 +134,9 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 		includeEnvVars:           cfg.IncludeEnvVars,
 		selfCgroupIno:            selfCgroupIno,
 		selfContainerID:          selfContainerID,
+		usdtManager:              cfg.UsdtManager,
+		usdtInstances:            make(map[libpf.PID]*usdt.Instance),
+		cleanupSem:               make(chan struct{}, maxConcurrentPIDCleanups),
 	}
 
 	collectInterpreterMetrics(ctx, pm, cfg.MonitorInterval)
@@ -202,6 +212,52 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 }
 
 func (pm *ProcessManager) Close() {
+	// Tear down any remaining per-PID USDT attachments. Detach() closes kernel
+	// uprobe links and must run without pm.mu held, so collect the instances
+	// under the lock, clear the map, then detach outside it. Done synchronously
+	// since this is terminal shutdown; without it the uprobe links leak across
+	// receiver start/stop cycles.
+	pm.mu.Lock()
+	instances := make([]*usdt.Instance, 0, len(pm.usdtInstances))
+	for pid, inst := range pm.usdtInstances {
+		instances = append(instances, inst)
+		delete(pm.usdtInstances, pid)
+	}
+	pm.mu.Unlock()
+
+	for _, inst := range instances {
+		if err := inst.Detach(); err != nil {
+			log.Errorf("USDT detach during shutdown: %v", err)
+		}
+	}
+
+	// Wait for any in-flight background cleanups (per-PID detach / eBPF map
+	// deletes spawned from the exit path) to drain before releasing manager
+	// resources. Relies on the caller having stopped feeding new exit events
+	// before Close, so no deferCleanup runs concurrently with this Wait.
+	pm.cleanupWG.Wait()
+
+	// Release manager-owned USDT resources (parse cache). Nil-safe when USDT
+	// is disabled.
+	if err := pm.usdtManager.Close(); err != nil {
+		log.Errorf("USDT manager close during shutdown: %v", err)
+	}
+}
+
+// deferCleanup runs fn on a background goroutine, tracked by cleanupWG so
+// Close can wait for it, and gated by cleanupSem so at most
+// maxConcurrentPIDCleanups run at once. Used for per-PID teardown (USDT
+// detach, eBPF map deletes) that must not hold pm.mu. Safe to call while
+// holding pm.mu: the semaphore is acquired inside the goroutine, so the
+// caller never blocks.
+func (pm *ProcessManager) deferCleanup(fn func()) {
+	pm.cleanupWG.Add(1)
+	go func() {
+		defer pm.cleanupWG.Done()
+		pm.cleanupSem <- struct{}{}
+		defer func() { <-pm.cleanupSem }()
+		fn()
+	}()
 }
 
 func (pm *ProcessManager) symbolizeFrame(pid libpf.PID, data []uint64, frames *libpf.Frames, mapping libpf.FrameMapping) error {

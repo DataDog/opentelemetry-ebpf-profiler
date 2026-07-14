@@ -19,6 +19,7 @@ import (
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
+	"go.opentelemetry.io/ebpf-profiler/usdt"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -123,6 +124,23 @@ type ProcessManager struct {
 	// Used as a fallback when /proc/<pid>/cgroup yields no container ID for processes
 	// that share the profiler's cgroup directory (e.g., private cgroup namespace).
 	selfContainerID libpf.String
+
+	// usdtManager handles per-process USDT (uprobe) attachment for heap
+	// profiling. May be nil if USDT support is disabled at startup.
+	usdtManager *usdt.Manager
+
+	// usdtInstances tracks the live USDT attachment state per PID. Mutated
+	// under pm.mu alongside the other per-PID maps. Entries are created/
+	// updated in SynchronizeProcess and torn down in processPIDExit.
+	usdtInstances map[libpf.PID]*usdt.Instance
+
+	// cleanupWG tracks in-flight background cleanups (USDT detach, eBPF map
+	// deletes) so Close can wait for them to drain on shutdown.
+	cleanupWG sync.WaitGroup
+
+	// cleanupSem bounds the number of concurrent background cleanups so that
+	// heavy process churn cannot spawn unbounded concurrent kernel work.
+	cleanupSem chan struct{}
 }
 
 // Mapping represents an executable memory mapping of a process.
@@ -160,4 +178,9 @@ type processInfo struct {
 	mappings []Mapping
 	// C-library Thread Specific Data information
 	libcInfo *libc.LibcInfo
+	// lastSeenTID is the most recent thread ID observed for this PID via
+	// a sync event. Used by ReconcileUSDTProbes to construct a Process
+	// that can fall back to /proc/<pid>/task/<tid>/maps when the main
+	// thread has exited.
+	lastSeenTID libpf.PID
 }

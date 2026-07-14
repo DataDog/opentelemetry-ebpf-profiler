@@ -102,6 +102,7 @@ func (c *Controller) Start(ctx context.Context) error {
 		IncludeEnvVars:         envVars,
 		ProbeLinks:             c.config.ProbeLinks,
 		LoadProbe:              c.config.LoadProbe,
+		HeapProfiling:          c.config.HeapProfiling,
 		ExecutableReporter:     c.config.ExecutableReporter,
 		BPFFSRoot:              c.config.BPFFSRoot,
 		OBIProcessCtx:          c.config.OBIProcessCtx,

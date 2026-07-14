@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
+	"go.opentelemetry.io/ebpf-profiler/usdt"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -495,6 +496,18 @@ func (pm *ProcessManager) processPIDExit(pid libpf.PID) {
 	}
 	pm.pidPageToMappingInfoSize -= min(pm.pidPageToMappingInfoSize, deleted)
 	pm.processRemovedInterpreters(pid, libpf.Set[util.OnDiskFileIdentifier]{})
+
+	// Tear down any USDT attachments held for this PID. Detach() does kernel
+	// work (closes uprobe links) and must not run while pm.mu is held, so hand
+	// it off to a bounded, Close-tracked background cleanup.
+	if inst, ok := pm.usdtInstances[pid]; ok {
+		delete(pm.usdtInstances, pid)
+		pm.deferCleanup(func() {
+			if derr := inst.Detach(); derr != nil {
+				log.Errorf("USDT detach for PID %d: %v", pid, derr)
+			}
+		})
+	}
 }
 
 // isInterpreterMapping reports whether a mapping should be passed to interpreter
@@ -580,6 +593,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		pm.mu.Unlock()
 		return
 	}
+	info.lastSeenTID = pr.TID()
 	// Check if process meta needs an update
 	updateProcessMeta := exe != libpf.NullString && exe != info.meta.Executable
 	oldProcessContextInfo := info.meta.ProcessContextInfo
@@ -810,6 +824,47 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		// Also see: Unified PID Events design doc
 		pm.ebpf.RemoveReportedPID(pid)
 	}
+
+	// Reconcile USDT attachments for this PID. Runs on every sync (not only
+	// on first sight) so probes inside libraries dlopen'd after process
+	// start get picked up on a subsequent sync. The Manager is nil when USDT
+	// support is disabled at startup.
+	if pm.usdtManager != nil {
+		// Acquire or create the Instance under pm.mu so that concurrent
+		// callers (SynchronizeProcess vs ReconcileUSDTProbes) share the
+		// same object and serialize via Instance.mu inside Reconcile,
+		// preventing two independent Instances from being built for the
+		// same PID (which would leak the loser's uprobe links).
+		pm.mu.Lock()
+		prev := pm.usdtInstances[pid]
+		if prev == nil {
+			prev = usdt.NewInstance(pid)
+			pm.usdtInstances[pid] = prev
+		}
+		pm.mu.Unlock()
+
+		_, err := pm.usdtManager.Reconcile(pid, pr, prev)
+		if err != nil {
+			log.Warnf("USDT reconcile for PID %d: %v", pid, err)
+		}
+
+		// Re-check that the PID is still tracked. processPIDExit may
+		// have fired concurrently while Reconcile was running.
+		pm.mu.Lock()
+		_, stillTracked := pm.pidToProcessInfo[pid]
+		pm.mu.Unlock()
+
+		if !stillTracked {
+			pm.mu.Lock()
+			delete(pm.usdtInstances, pid)
+			pm.mu.Unlock()
+			pm.deferCleanup(func() {
+				if derr := prev.Detach(); derr != nil {
+					log.Errorf("USDT detach for exited PID %d: %v", pid, derr)
+				}
+			})
+		}
+	}
 }
 
 // CleanupPIDs executes a periodic synchronization of pidToProcessInfo table with system processes.
@@ -831,6 +886,95 @@ func (pm *ProcessManager) CleanupPIDs() {
 
 	if len(deadPids) > 0 {
 		log.Debugf("Cleaned up %d dead PIDs", len(deadPids))
+	}
+}
+
+// ReconcileUSDTProbes performs a periodic re-reconciliation of USDT probes
+// for tracked PIDs that currently have no attachments. This handles the case
+// where a process was first discovered before its USDT-bearing libraries were
+// loaded (e.g., a Java process that loads a native .so via JNA after JVM
+// startup). The batchSize parameter limits how many PIDs are reconciled per
+// call to amortise /proc I/O cost.
+//
+// NOTE: Exported only for tracer.
+func (pm *ProcessManager) ReconcileUSDTProbes(batchSize int) {
+	if pm.usdtManager == nil {
+		return
+	}
+
+	// Collect candidate PIDs: tracked PIDs with no current USDT attachments.
+	pm.mu.RLock()
+	candidates := make([]libpf.PID, 0, min(batchSize, len(pm.pidToProcessInfo)))
+	for pid := range pm.pidToProcessInfo {
+		if len(candidates) >= batchSize {
+			break
+		}
+		// Skip PIDs waiting for exit cleanup.
+		if _, exiting := pm.exitEvents[pid]; exiting {
+			continue
+		}
+		inst := pm.usdtInstances[pid]
+		if inst == nil || inst.NumAttached() == 0 {
+			candidates = append(candidates, pid)
+		}
+	}
+	pm.mu.RUnlock()
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	numAttached := 0
+	for _, pid := range candidates {
+		// Acquire or create the Instance under pm.mu (same pattern as
+		// SynchronizeProcess) so concurrent callers share one object.
+		pm.mu.Lock()
+		info := pm.pidToProcessInfo[pid]
+		if info == nil {
+			// PID disappeared between candidate collection and now.
+			pm.mu.Unlock()
+			continue
+		}
+		prev := pm.usdtInstances[pid]
+		if prev == nil {
+			prev = usdt.NewInstance(pid)
+			pm.usdtInstances[pid] = prev
+		}
+		tid := info.lastSeenTID
+		pm.mu.Unlock()
+
+		pr := process.New(pid, tid)
+
+		_, err := pm.usdtManager.Reconcile(pid, pr, prev)
+		if err != nil {
+			log.Debugf("USDT periodic reconcile for PID %d: %v", pid, err)
+			continue
+		}
+
+		if prev.NumAttached() > 0 {
+			numAttached++
+		}
+
+		// Re-check that the PID is still tracked.
+		pm.mu.Lock()
+		_, stillTracked := pm.pidToProcessInfo[pid]
+		pm.mu.Unlock()
+
+		if !stillTracked {
+			pm.mu.Lock()
+			delete(pm.usdtInstances, pid)
+			pm.mu.Unlock()
+			pm.deferCleanup(func() {
+				if derr := prev.Detach(); derr != nil {
+					log.Errorf("USDT detach for exited PID %d: %v", pid, derr)
+				}
+			})
+		}
+	}
+
+	if numAttached > 0 {
+		log.Debugf("USDT periodic reconcile: attached probes for %d new PIDs (of %d candidates)",
+			numAttached, len(candidates))
 	}
 }
 

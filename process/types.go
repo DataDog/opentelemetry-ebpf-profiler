@@ -128,6 +128,10 @@ type Process interface {
 	// PID returns the process identifier.
 	PID() libpf.PID
 
+	// TID returns the thread identifier used to construct this Process.
+	// For the main thread, TID == PID.
+	TID() libpf.PID
+
 	// GetMachineData reads machine specific data from the target process.
 	GetMachineData() MachineData
 

@@ -40,6 +40,14 @@ const (
 	// eventReaderDeadline is the timeout for perf event reads. It allows the
 	// reader goroutine to periodically check for context cancellation.
 	eventReaderDeadline = 100 * time.Millisecond
+
+	// usdtReconcileInterval is how often we sweep tracked PIDs with no
+	// current USDT attachments, to catch libraries dlopen'd after the
+	// process was first seen.
+	usdtReconcileInterval = 30 * time.Second
+	// usdtReconcileBatchSize limits how many PIDs are reconciled per sweep,
+	// to amortise the /proc I/O cost across ticks.
+	usdtReconcileBatchSize = 20
 )
 
 // StartPIDEventProcessor spawns a goroutine to process PID events.
@@ -49,14 +57,22 @@ func (t *Tracer) StartPIDEventProcessor(ctx context.Context) {
 
 // Process the PID events that are incoming in the Tracer channel.
 func (t *Tracer) processPIDEvents(ctx context.Context) {
+	defer close(t.pidEventsDone)
+
 	pidCleanupTicker := time.NewTicker(t.intervals.PIDCleanupInterval())
 	defer pidCleanupTicker.Stop()
+
+	usdtReconcileTicker := time.NewTicker(usdtReconcileInterval)
+	defer usdtReconcileTicker.Stop()
+
 	for {
 		select {
 		case pidTid := <-t.pidEvents:
 			t.processManager.SynchronizeProcess(process.New(pidTid.PID(), pidTid.TID()))
 		case <-pidCleanupTicker.C:
 			t.processManager.CleanupPIDs()
+		case <-usdtReconcileTicker.C:
+			t.processManager.ReconcileUSDTProbes(usdtReconcileBatchSize)
 		case <-ctx.Done():
 			return
 		}
