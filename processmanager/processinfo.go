@@ -172,17 +172,25 @@ func (pm *ProcessManager) assignInterpreter(pid libpf.PID, key util.OnDiskFileId
 	pm.interpreters[pid][key] = instance
 }
 
-// ensureProcessInstance returns the per-PID process-context instance, creating
-// it the first time the PID is seen. Caller is responsible to hold pm.mu write
-// lock to avoid race conditions.
-func (pm *ProcessManager) ensureProcessInstance(pid libpf.PID,
-	pr process.Process) *processctx.Instance {
-	if instance, ok := pm.processInstances[pid]; ok {
-		return instance
+// ensureProcessInstances attaches the registered process-scoped interpreters to
+// the PID the first time it is seen and returns the per-PID instances. Caller is
+// responsible to hold pm.mu write lock to avoid race conditions.
+func (pm *ProcessManager) ensureProcessInstances(pid libpf.PID,
+	pr process.Process) []interpreter.ProcessInstance {
+	if instances, ok := pm.processInstances[pid]; ok {
+		return instances
 	}
-	instance := processctx.NewInstance(pid, pr.GetRemoteMemory())
-	pm.processInstances[pid] = instance
-	return instance
+	instances := make([]interpreter.ProcessInstance, 0, len(pm.processInterpreters))
+	for _, pi := range pm.processInterpreters {
+		instance, err := pi.AttachProcess(pid, pr.GetRemoteMemory())
+		if err != nil {
+			log.Errorf("Failed to attach process interpreter for PID %d: %v", pid, err)
+			continue
+		}
+		instances = append(instances, instance)
+	}
+	pm.processInstances[pid] = instances
+	return instances
 }
 
 // updatePIDAnonymousMappingInterest rewrites the dummy pid_page_to_mapping_info entry
@@ -792,14 +800,18 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 			info.meta = meta
 		}
 	}
-	processInstance := pm.ensureProcessInstance(pid, pr)
+	processInstances := pm.ensureProcessInstances(pid, pr)
 	interpreters := pm.interpreters[pid]
 	pm.mu.Unlock()
 
-	// Synchronize the process-context instance with the current process state. It
-	// resolves and caches its own per-PID state, which is later pulled in during
-	// trace enrichment. Done outside the lock as it may read target-process memory.
-	processInstance.Synchronize(contextMappingAddr, envVars, updateProcessMeta || newProcess)
+	// Synchronize the process-scoped interpreters with the current process state.
+	// They resolve and cache their own per-PID state, which is later pulled in
+	// during trace enrichment. Done outside the lock as it may read target-process
+	// memory.
+	newProcessOrExec := updateProcessMeta || newProcess
+	for _, instance := range processInstances {
+		instance.Synchronize(contextMappingAddr, envVars, newProcessOrExec)
+	}
 
 	// Synchronize all interpreters with updated mappings
 	for _, instance := range interpreters {
@@ -940,6 +952,14 @@ func (pm *ProcessManager) ProcessedUntil(traceCaptureKTime times.KTime) {
 			}
 		}
 		delete(pm.interpreters, pid)
+
+		for _, instance := range pm.processInstances[pid] {
+			if err2 := instance.Detach(); err2 != nil {
+				err = errors.Join(err,
+					fmt.Errorf("failed to detach process interpreter for PID %d: %v",
+						pid, err2))
+			}
+		}
 		delete(pm.processInstances, pid)
 
 		delete(pm.exitEvents, pid)

@@ -14,6 +14,7 @@ import (
 
 	lru "github.com/elastic/go-freelru"
 	"github.com/zeebo/xxh3"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
@@ -94,6 +95,11 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 		includeEnvVars[env] = libpf.Void{}
 	}
 
+	// Process-scoped interpreters, attached once per PID unconditionally. Kept
+	// separate from the ELF-keyed interpreter loaders (eim) so they run even when
+	// all ELF interpreters are disabled.
+	processInterpreters := []interpreter.ProcessInterpreter{processctx.New()}
+
 	elfInfoCache, err := lru.New[util.OnDiskFileIdentifier, elfInfo](elfInfoCacheSize,
 		util.OnDiskFileIdentifier.Hash32)
 	if err != nil {
@@ -129,7 +135,8 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 		interpreterTracerEnabled: em.NumInterpreterLoaders() > 0,
 		eim:                      em,
 		interpreters:             interpreters,
-		processInstances:         make(map[libpf.PID]*processctx.Instance),
+		processInterpreters:      processInterpreters,
+		processInstances:         make(map[libpf.PID][]interpreter.ProcessInstance),
 		exitEvents:               make(map[libpf.PID]times.KTime),
 		pidToProcessInfo:         make(map[libpf.PID]*processInfo),
 		ebpf:                     cfg.EbpfHandler,
@@ -415,12 +422,16 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 		}
 	}
 
-	instance := pm.processInstances[pid]
+	processInstances := pm.processInstances[pid]
 	pm.mu.RUnlock()
 
-	if instance != nil {
-		meta.Resource = instance.TraceContribution()
+	// Merge the process-scoped interpreters' contributions into the trace
+	// resource. The reporter derives the dedup context key from it.
+	var resource *pcommon.Resource
+	for _, instance := range processInstances {
+		resource = processctx.MergeResources(resource, instance.TraceContribution())
 	}
+	meta.Resource = resource
 	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace, 1)
 
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {

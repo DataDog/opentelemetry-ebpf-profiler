@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	processcontextpb "go.opentelemetry.io/ebpf-profiler/interpreter/processctx/v1development"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
@@ -359,7 +360,7 @@ func EnvVars() []string {
 // WithMergedEnvVars returns process context with attributes derived from
 // OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES merged into its Resource.
 func WithMergedEnvVars(info Info, envVars map[libpf.String]libpf.String) Info {
-	info.Resource = mergeResources(info.Resource, resourceFromEnvVars(envVars))
+	info.Resource = MergeResources(info.Resource, resourceFromEnvVars(envVars))
 	return info
 }
 
@@ -386,10 +387,10 @@ func resourceFromEnvVars(envVars map[libpf.String]libpf.String) *pcommon.Resourc
 	return &r
 }
 
-// mergeResources returns a Resource with primary's attributes plus any keys
+// MergeResources returns a Resource with primary's attributes plus any keys
 // from secondary not already in primary (primary wins on collision). Returns
 // nil only when both inputs are nil. Inputs are not modified.
-func mergeResources(primary, secondary *pcommon.Resource) *pcommon.Resource {
+func MergeResources(primary, secondary *pcommon.Resource) *pcommon.Resource {
 	if primary == nil {
 		return secondary
 	}
@@ -456,6 +457,8 @@ func NewInstance(pid libpf.PID, rm remotememory.RemoteMemory) *Instance {
 	return &Instance{pid: pid, rm: rm}
 }
 
+var _ interpreter.ProcessInstance = &Instance{}
+
 // Synchronize reads the process context (if the OTEL_CTX mapping is present) and
 // merges attributes derived from OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES,
 // publishing a new snapshot when the context has changed. contextMappingAddr is
@@ -482,3 +485,21 @@ func (i *Instance) TraceContribution() *pcommon.Resource {
 	}
 	return nil
 }
+
+// Detach releases per-PID resources. Process context holds none.
+func (i *Instance) Detach() error { return nil }
+
+// processInterpreter implements interpreter.ProcessInterpreter for the OTel
+// process context.
+type processInterpreter struct{}
+
+var _ interpreter.ProcessInterpreter = processInterpreter{}
+
+func (processInterpreter) AttachProcess(pid libpf.PID,
+	rm remotememory.RemoteMemory,
+) (interpreter.ProcessInstance, error) {
+	return NewInstance(pid, rm), nil
+}
+
+// New returns the OTel process-context process interpreter.
+func New() interpreter.ProcessInterpreter { return processInterpreter{} }

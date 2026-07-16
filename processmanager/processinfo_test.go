@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/processctx"
 	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -413,7 +412,7 @@ func TestSynchronizeProcessUpdatesAnonymousMappingInterest(t *testing.T) {
 		},
 		pidToProcessInfo: map[libpf.PID]*processInfo{pid: {}},
 		exitEvents:       make(map[libpf.PID]times.KTime),
-		processInstances: make(map[libpf.PID]*processctx.Instance),
+		processInstances: make(map[libpf.PID][]interpreter.ProcessInstance),
 	}
 
 	pm.SynchronizeProcess(&testProcess{pid: pid})
@@ -466,7 +465,7 @@ func TestSynchronizeProcessSkipsDllMappingsWithoutAnonymousMappingInterest(t *te
 			},
 		},
 		exitEvents:       make(map[libpf.PID]times.KTime),
-		processInstances: make(map[libpf.PID]*processctx.Instance),
+		processInstances: make(map[libpf.PID][]interpreter.ProcessInstance),
 	}
 
 	pm.SynchronizeProcess(&testProcess{

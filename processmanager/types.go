@@ -10,7 +10,6 @@ import (
 	lru "github.com/elastic/go-freelru"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/processctx"
 	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -59,10 +58,13 @@ type ProcessManager struct {
 	// the unique on-disk identifier of the interpreter DSO.
 	interpreters map[libpf.PID]map[util.OnDiskFileIdentifier]interpreter.Instance
 
-	// processInstances holds the per-PID OTel process-context state. One instance
-	// is created per tracked PID, unconditionally and independent of the ELF-keyed
-	// interpreters above.
-	processInstances map[libpf.PID]*processctx.Instance
+	// processInterpreters holds the registered process-scoped interpreters (e.g.
+	// the OTel process context). They are attached once per PID, unconditionally,
+	// independent of the ELF-keyed interpreters above.
+	processInterpreters []interpreter.ProcessInterpreter
+
+	// processInstances records the per-PID process-scoped interpreter instances.
+	processInstances map[libpf.PID][]interpreter.ProcessInstance
 
 	// pidToProcessInfo keeps track of the executable memory mappings.
 	pidToProcessInfo map[libpf.PID]*processInfo

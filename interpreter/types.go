@@ -7,6 +7,8 @@ import (
 	"errors"
 	"unsafe"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
+
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -174,4 +176,34 @@ type Instance interface {
 
 	// Release resources that are used to symbolize a stack.
 	ReleaseResources() error
+}
+
+// ProcessInterpreter is a process-scoped interpreter kind. Unlike the ELF-keyed
+// Loader/Data/Instance machinery above, a ProcessInterpreter is attached once
+// per PID unconditionally (it is not tied to any particular ELF/DSO mapping).
+// It is the home for per-process metadata that does not come from an executable
+// mapping, such as the OTel process context published in the OTEL_CTX memory
+// region.
+type ProcessInterpreter interface {
+	// AttachProcess is called once per PID to create per-process state.
+	AttachProcess(pid libpf.PID, rm remotememory.RemoteMemory) (ProcessInstance, error)
+}
+
+// ProcessInstance is per-PID state managed by a ProcessInterpreter.
+type ProcessInstance interface {
+	// Synchronize resolves per-process state on each mapping synchronization.
+	// contextMappingAddr is the virtual address of the process-context mapping
+	// observed during this synchronization (0 if absent); the process manager
+	// detects it during its single mapping pass. newProcessOrExec is true on the
+	// first synchronization of a PID or when an exec has been detected.
+	Synchronize(contextMappingAddr uint64,
+		envVars map[libpf.String]libpf.String, newProcessOrExec bool)
+
+	// TraceContribution returns the OTel resource this instance contributes to a
+	// trace event (nil if none). The process manager merges the contributions of
+	// all process instances for a PID before reporting.
+	TraceContribution() *pcommon.Resource
+
+	// Detach releases any per-PID resources held by the instance.
+	Detach() error
 }
