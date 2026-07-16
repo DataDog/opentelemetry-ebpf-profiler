@@ -27,12 +27,12 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/processctx"
 	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
@@ -170,6 +170,19 @@ func (pm *ProcessManager) assignInterpreter(pid libpf.PID, key util.OnDiskFileId
 		pm.interpreters[pid] = make(map[util.OnDiskFileIdentifier]interpreter.Instance)
 	}
 	pm.interpreters[pid][key] = instance
+}
+
+// ensureProcessInstance returns the per-PID process-context instance, creating
+// it the first time the PID is seen. Caller is responsible to hold pm.mu write
+// lock to avoid race conditions.
+func (pm *ProcessManager) ensureProcessInstance(pid libpf.PID,
+	pr process.Process) *processctx.Instance {
+	if instance, ok := pm.processInstances[pid]; ok {
+		return instance
+	}
+	instance := processctx.NewInstance(pid, pr.GetRemoteMemory())
+	pm.processInstances[pid] = instance
+	return instance
 }
 
 // updatePIDAnonymousMappingInterest rewrites the dummy pid_page_to_mapping_info entry
@@ -585,7 +598,6 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	updateProcessMeta := exe != libpf.NullString && exe != info.meta.Executable
 
 	// Get existing info
-	oldProcessContextPublishedAtNs := info.meta.ProcessContextInfo.PublishedAtNs
 	oldEnvVars := info.meta.EnvVariables
 	oldMappings := info.mappings
 	newProcess := len(info.mappings) == 0
@@ -631,7 +643,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	// file-backed mappings and anonymous executable/DLL mappings needed by interpreters.
 	// All other mappings are skipped.
 	numParseErrors, err := pr.IterateMappings(func(m process.RawMapping) bool {
-		if processcontext.IsContextMapping(m.IsExecutable(), m.Path) {
+		if processctx.IsContextMapping(m.IsExecutable(), m.Path) {
 			contextMappingAddr = m.Vaddr
 			// Even if process context is not found, it might be published in the future.
 			// For now, we rely on a new call to synchronizeMappings to pick it up.
@@ -770,10 +782,6 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		envVars = meta.EnvVariables
 	}
 
-	newProcessContextInfo, publishProcessContextInfo := processcontext.Resolve(
-		contextMappingAddr, pid, pr.GetRemoteMemory(),
-		oldProcessContextPublishedAtNs, envVars, updateProcessMeta || newProcess)
-
 	// Sort and publish the new mappings and meta
 	slices.SortFunc(mappings, compareMapping)
 	pm.mu.Lock()
@@ -783,12 +791,15 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		if updateProcessMeta {
 			info.meta = meta
 		}
-		if publishProcessContextInfo {
-			info.meta.ProcessContextInfo = newProcessContextInfo
-		}
 	}
+	processInstance := pm.ensureProcessInstance(pid, pr)
 	interpreters := pm.interpreters[pid]
 	pm.mu.Unlock()
+
+	// Synchronize the process-context instance with the current process state. It
+	// resolves and caches its own per-PID state, which is later pulled in during
+	// trace enrichment. Done outside the lock as it may read target-process memory.
+	processInstance.Synchronize(contextMappingAddr, envVars, updateProcessMeta || newProcess)
 
 	// Synchronize all interpreters with updated mappings
 	for _, instance := range interpreters {
@@ -929,6 +940,8 @@ func (pm *ProcessManager) ProcessedUntil(traceCaptureKTime times.KTime) {
 			}
 		}
 		delete(pm.interpreters, pid)
+		delete(pm.processInstances, pid)
+
 		delete(pm.exitEvents, pid)
 		log.Debugf("PID %v exit latency %v ms", pid, (nowKTime-pidExitKTime)/1e6)
 	}

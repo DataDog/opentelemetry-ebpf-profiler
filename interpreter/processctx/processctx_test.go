@@ -3,7 +3,7 @@
 
 //go:build amd64 || arm64
 
-package processcontext_test
+package processctx_test
 
 import (
 	"encoding/binary"
@@ -19,10 +19,10 @@ import (
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
 
+	"go.opentelemetry.io/ebpf-profiler/interpreter/processctx"
+	processcontextpb "go.opentelemetry.io/ebpf-profiler/interpreter/processctx/v1development"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/processcontext"
-	processcontextpb "go.opentelemetry.io/ebpf-profiler/processcontext/v1development"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
@@ -180,12 +180,12 @@ func createValidHeader(payloadSize uint32, payloadPtr uint64, publishedAt uint64
 }
 
 func TestProcessContext_IsContextMapping(t *testing.T) {
-	assert.True(t, processcontext.IsContextMapping(false, "[anon:OTEL_CTX]"))
-	assert.True(t, processcontext.IsContextMapping(false, "[anon_shmem:OTEL_CTX]"))
-	assert.True(t, processcontext.IsContextMapping(false, "/memfd:OTEL_CTX"))
-	assert.True(t, processcontext.IsContextMapping(false, "/memfd:OTEL_CTX (deleted)"))
-	assert.False(t, processcontext.IsContextMapping(false, "test"))
-	assert.False(t, processcontext.IsContextMapping(true, "[anon:OTEL_CTX]"))
+	assert.True(t, processctx.IsContextMapping(false, "[anon:OTEL_CTX]"))
+	assert.True(t, processctx.IsContextMapping(false, "[anon_shmem:OTEL_CTX]"))
+	assert.True(t, processctx.IsContextMapping(false, "/memfd:OTEL_CTX"))
+	assert.True(t, processctx.IsContextMapping(false, "/memfd:OTEL_CTX (deleted)"))
+	assert.False(t, processctx.IsContextMapping(false, "test"))
+	assert.False(t, processctx.IsContextMapping(true, "[anon:OTEL_CTX]"))
 }
 
 func TestProcessContext_Read(t *testing.T) {
@@ -197,7 +197,7 @@ func TestProcessContext_Read(t *testing.T) {
 	tests := []struct {
 		name              string
 		setupMock         func(*mockReader)
-		expectedResult    processcontext.Info
+		expectedResult    processctx.Info
 		expectedErr       error
 		errorSubstring    string
 		lastPublishedAtNs uint64
@@ -211,7 +211,7 @@ func TestProcessContext_Read(t *testing.T) {
 				mock.writeAt(headerAddr, header)
 				mock.writeAt(payloadAddr, payload)
 			},
-			expectedResult: processcontext.Info{
+			expectedResult: processctx.Info{
 				Resource:        expectedResource(),
 				ExtraAttributes: expectedExtraAttributes(),
 				PublishedAtNs:   123456789,
@@ -222,7 +222,7 @@ func TestProcessContext_Read(t *testing.T) {
 			setupMock: func(mock *mockReader) {
 				mock.setError(errors.New("read error"))
 			},
-			expectedErr: processcontext.ErrInvalidContext,
+			expectedErr: processctx.ErrInvalidContext,
 		},
 		{
 			name: "invalid protobuf",
@@ -234,7 +234,7 @@ func TestProcessContext_Read(t *testing.T) {
 				mock.writeAt(headerAddr, header)
 				mock.writeAt(payloadAddr, invalidPayload)
 			},
-			expectedErr:    processcontext.ErrInvalidContext,
+			expectedErr:    processctx.ErrInvalidContext,
 			errorSubstring: "failed to unmarshal",
 		},
 		{
@@ -244,7 +244,7 @@ func TestProcessContext_Read(t *testing.T) {
 				header := createHeader("INVALID!", supportedVersion, 100, 0x2000, 123456789)
 				mock.writeAt(headerAddr, header)
 			},
-			expectedErr:    processcontext.ErrInvalidContext,
+			expectedErr:    processctx.ErrInvalidContext,
 			errorSubstring: "signature",
 		},
 		{
@@ -254,7 +254,7 @@ func TestProcessContext_Read(t *testing.T) {
 				header := createHeader(headerSignature, 999, 100, 0x2000, 123456789)
 				mock.writeAt(headerAddr, header)
 			},
-			expectedErr:    processcontext.ErrInvalidContext,
+			expectedErr:    processctx.ErrInvalidContext,
 			errorSubstring: "version",
 		},
 		{
@@ -264,7 +264,7 @@ func TestProcessContext_Read(t *testing.T) {
 				header := createValidHeader(0, 0x2000, 123456789)
 				mock.writeAt(headerAddr, header)
 			},
-			expectedErr:    processcontext.ErrInvalidContext,
+			expectedErr:    processctx.ErrInvalidContext,
 			errorSubstring: "payload size",
 		},
 		{
@@ -274,7 +274,7 @@ func TestProcessContext_Read(t *testing.T) {
 				header := createHeader(headerSignature, supportedVersion, 1024*1024, 0x2000, 123456789)
 				mock.writeAt(headerAddr, header)
 			},
-			expectedErr:    processcontext.ErrInvalidContext,
+			expectedErr:    processctx.ErrInvalidContext,
 			errorSubstring: "payload size",
 		},
 		{
@@ -285,7 +285,7 @@ func TestProcessContext_Read(t *testing.T) {
 				header := createValidHeader(100, 0x2000, 0)
 				mock.writeAt(headerAddr, header)
 			},
-			expectedErr: processcontext.ErrConcurrentUpdate,
+			expectedErr: processctx.ErrConcurrentUpdate,
 		},
 		{
 			name: "published at same as last published",
@@ -295,7 +295,7 @@ func TestProcessContext_Read(t *testing.T) {
 				mock.writeAt(headerAddr, header)
 			},
 			lastPublishedAtNs: 123456788,
-			expectedErr:       processcontext.ErrNoUpdate,
+			expectedErr:       processctx.ErrNoUpdate,
 		},
 		{
 			name: "published at too old",
@@ -305,7 +305,7 @@ func TestProcessContext_Read(t *testing.T) {
 				mock.writeAt(headerAddr, header)
 			},
 			lastPublishedAtNs: 123456788,
-			expectedErr:       processcontext.ErrNoUpdate,
+			expectedErr:       processctx.ErrNoUpdate,
 		},
 	}
 
@@ -316,7 +316,7 @@ func TestProcessContext_Read(t *testing.T) {
 
 			rm := remotememory.RemoteMemory{ReaderAt: mock}
 
-			ctx, err := processcontext.Read(mappingAddr, rm, tt.lastPublishedAtNs, 0)
+			ctx, err := processctx.Read(mappingAddr, rm, tt.lastPublishedAtNs, 0)
 
 			if tt.expectedErr == nil {
 				require.NoError(t, err)
@@ -422,7 +422,7 @@ func TestProcessContext_Read_RealProcessContext(t *testing.T) {
 
 			var contextMappingAddr uint64
 			_, err = proc.IterateMappings(func(m process.RawMapping) bool {
-				if processcontext.IsContextMapping(m.IsExecutable(), m.Path) {
+				if processctx.IsContextMapping(m.IsExecutable(), m.Path) {
 					contextMappingAddr = m.Vaddr
 					return false
 				}
@@ -433,10 +433,10 @@ func TestProcessContext_Read_RealProcessContext(t *testing.T) {
 			}
 			require.NotZero(t, contextMappingAddr)
 
-			result, err := processcontext.Read(libpf.Address(contextMappingAddr), proc.GetRemoteMemory(), 0, 0)
+			result, err := processctx.Read(libpf.Address(contextMappingAddr), proc.GetRemoteMemory(), 0, 0)
 			require.NoError(t, err)
 			require.EqualExportedValues(t,
-				processcontext.Info{
+				processctx.Info{
 					Resource:        expectedResource(),
 					ExtraAttributes: expectedExtraAttributes(),
 					PublishedAtNs:   123456789,
@@ -610,7 +610,7 @@ func TestWithMergedEnvVars(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := processcontext.Info{}
+			info := processctx.Info{}
 			if tt.preexisting != nil {
 				r := pcommon.NewResource()
 				for k, v := range tt.preexisting {
@@ -619,7 +619,7 @@ func TestWithMergedEnvVars(t *testing.T) {
 				info.Resource = &r
 			}
 
-			info = processcontext.WithMergedEnvVars(info, tt.envVars)
+			info = processctx.WithMergedEnvVars(info, tt.envVars)
 
 			if tt.expected == nil {
 				if tt.preexisting == nil {
@@ -639,79 +639,30 @@ func TestWithMergedEnvVars(t *testing.T) {
 	}
 }
 
-func TestResourceToContextKey(t *testing.T) {
-	tests := []struct {
-		name     string
-		attrs    map[string]string
-		nilRes   bool
-		expected string
-	}{
-		{
-			name:     "nil resource",
-			nilRes:   true,
-			expected: "",
-		},
-		{
-			name:     "empty resource",
-			attrs:    nil,
-			expected: "",
-		},
-		{
-			name: "all three present",
-			attrs: map[string]string{
-				"service.namespace":   "ns",
-				"service.name":        "svc",
-				"service.instance.id": "id",
-			},
-			expected: "ns:svc:id",
-		},
-		{
-			name: "missing namespace",
-			attrs: map[string]string{
-				"service.name":        "svc",
-				"service.instance.id": "id",
-			},
-			expected: ":svc:id",
-		},
-		{
-			name: "missing name",
-			attrs: map[string]string{
-				"service.namespace":   "ns",
-				"service.instance.id": "id",
-			},
-			expected: "ns::id",
-		},
-		{
-			name: "missing instance id",
-			attrs: map[string]string{
-				"service.namespace": "ns",
-				"service.name":      "svc",
-			},
-			expected: "ns:svc:",
-		},
-		{
-			name: "irrelevant attributes ignored",
-			attrs: map[string]string{
-				"service.namespace":   "ns",
-				"service.name":        "svc",
-				"service.instance.id": "id",
-				"deployment.env":      "prod",
-			},
-			expected: "ns:svc:id",
-		},
-	}
+// TestInstance verifies the process-context Instance: Synchronize resolves
+// env-var-only context (no OTEL_CTX mapping) that TraceContribution then
+// exposes, while a steady-state no-op sync keeps the prior snapshot.
+func TestInstance(t *testing.T) {
+	// rm is unused on the addr==0 path, so a zero value is fine.
+	inst := processctx.NewInstance(1234, remotememory.RemoteMemory{})
+	require.NotNil(t, inst)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var res *pcommon.Resource
-			if !tt.nilRes {
-				r := pcommon.NewResource()
-				for k, v := range tt.attrs {
-					r.Attributes().PutStr(k, v)
-				}
-				res = &r
-			}
-			assert.Equal(t, tt.expected, processcontext.ResourceToContextKey(res).String())
-		})
+	// Before any Synchronize, there is no contribution.
+	assert.Nil(t, inst.TraceContribution())
+
+	// New process, no OTEL_CTX mapping: env vars alone produce a Resource.
+	envVars := map[libpf.String]libpf.String{
+		libpf.Intern("OTEL_SERVICE_NAME"): libpf.Intern("my-service"),
 	}
+	inst.Synchronize(0, envVars, true)
+
+	res := inst.TraceContribution()
+	require.NotNil(t, res)
+	v, ok := res.Attributes().Get("service.name")
+	require.True(t, ok)
+	assert.Equal(t, "my-service", v.Str())
+
+	// Steady-state no-op sync (no mapping, not new/exec) keeps the prior snapshot.
+	inst.Synchronize(0, nil, false)
+	assert.Same(t, res, inst.TraceContribution())
 }

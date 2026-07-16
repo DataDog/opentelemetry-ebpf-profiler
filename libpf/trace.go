@@ -6,7 +6,6 @@ package libpf // import "go.opentelemetry.io/ebpf-profiler/libpf"
 import (
 	"unique"
 
-	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/ebpf-profiler/stringutil"
 )
 
@@ -140,7 +139,6 @@ type EbpfTrace struct {
 	FrameData        []uint64
 	KernelFrames     Frames
 	FrameDataBuf     [3072]uint64
-	Resource         *pcommon.Resource
 	Value            int64
 	KTime            int64
 	CpuID            uint32

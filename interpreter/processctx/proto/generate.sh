@@ -9,7 +9,7 @@ set -eu
 # It requires protoc and protoc-gen-go to be installed.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 # Create temporary directory for OpenTelemetry proto definitions
 OTEL_PROTO_DIR="$(mktemp -d)"
@@ -24,14 +24,14 @@ git clone --depth 1 --branch v1.10.0 \
 echo -n "Generating ProcessContext protobuf code..."
 cd "${REPO_ROOT}"
 
-mkdir -p processcontext/v1development
+mkdir -p interpreter/processctx/v1development
 
 protoc \
-    --go_out=processcontext/v1development \
+    --go_out=interpreter/processctx/v1development \
     --go_opt=paths=source_relative \
-    "--go_opt=Mprocesscontext.proto=go.opentelemetry.io/ebpf-profiler/processcontext/proto" \
+    "--go_opt=Mprocesscontext.proto=go.opentelemetry.io/ebpf-profiler/interpreter/processctx/proto" \
     --proto_path="${OTEL_PROTO_DIR}" \
-    --proto_path=processcontext/proto \
+    --proto_path=interpreter/processctx/proto \
     processcontext.proto
 
 echo " done"

@@ -23,9 +23,37 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	"go.opentelemetry.io/otel/metric/noop"
 )
+
+// captureReporter is a TraceReporter that records the enriched Resource of each
+// reported trace event per PID. The process-context Resource is attached to the
+// trace event meta by the process manager's enrichment step (not to the raw
+// EbpfTrace), so the test inspects the reported meta rather than the raw trace.
+type captureReporter struct {
+	mu    sync.Mutex
+	byPID map[libpf.PID][]*pcommon.Resource
+}
+
+func (c *captureReporter) ReportTraceEvent(_ *libpf.Trace, meta *samples.TraceEventMeta) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.byPID[meta.PID] = append(c.byPID[meta.PID], meta.Resource)
+	return nil
+}
+
+func (c *captureReporter) matched(pid libpf.PID, want map[string]string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, r := range c.byPID[pid] {
+		if r != nil && resourceMatches(r, want) {
+			return true
+		}
+	}
+	return false
+}
 
 // expectedResource lists the resource attributes the testdata C programs
 // publish via init_process_context() in processctx_lib.c.
@@ -80,9 +108,12 @@ func Test_ProcessContext(t *testing.T) {
 
 			metrics.Start(noop.Meter{})
 
+			rep := &captureReporter{byPID: make(map[libpf.PID][]*pcommon.Resource)}
+
 			log.SetLevel(slog.LevelDebug)
 			trc, err := tracer.NewTracer(ctx, &tracer.Config{
 				Intervals:              &mockIntervals{},
+				TraceReporter:          rep,
 				InterpretersConfig:     interpreterconfig.AllInterpreters(),
 				SamplesPerSecond:       20,
 				ProbabilisticInterval:  100,
@@ -128,24 +159,25 @@ func Test_ProcessContext(t *testing.T) {
 			defer timeout.Stop()
 
 			ok := false
+			targetPID := libpf.PID(cmd.Process.Pid)
 		Loop:
 			for {
 				select {
 				case <-timeout.C:
 					break Loop
 				case trace := <-traceCh:
-					if trace == nil || trace.PID != libpf.PID(cmd.Process.Pid) {
+					if trace == nil || trace.PID != targetPID {
 						continue
 					}
-					if trace.Resource == nil {
-						continue
+					// Run the full trace-handling pipeline (frame conversion +
+					// process-context enrichment), which attaches the resolved
+					// Resource to the reported trace event meta.
+					trc.HandleTrace(trace)
+					if rep.matched(targetPID, expectedResource) {
+						t.Logf("Got expected resource for PID %d", trace.PID)
+						ok = true
+						break Loop
 					}
-					if !resourceMatches(trace.Resource, expectedResource) {
-						continue
-					}
-					t.Logf("Got expected resource for PID %d", trace.PID)
-					ok = true
-					break Loop
 				}
 			}
 			cancel()

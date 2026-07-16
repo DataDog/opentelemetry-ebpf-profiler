@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package processcontext // import "go.opentelemetry.io/ebpf-profiler/processcontext"
+package processctx // import "go.opentelemetry.io/ebpf-profiler/interpreter/processctx"
 
 import (
 	"encoding/binary"
@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"structs"
+	"sync/atomic"
 	"unsafe"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -18,9 +19,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	processcontextpb "go.opentelemetry.io/ebpf-profiler/interpreter/processctx/v1development"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
-	processcontextpb "go.opentelemetry.io/ebpf-profiler/processcontext/v1development"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 )
 
@@ -72,10 +73,10 @@ var (
 	ErrNoUpdate = errors.New("ProcessContext has not been updated")
 )
 
-// Info is a snapshot of process context. The pointed-to Resource and
-// ExtraAttributes are shared by pointer across goroutines (process-manager
-// writer, tracer, reporter) without locking; once an Info is published they
-// MUST be treated as read-only by all holders.
+// Info is an immutable snapshot of process context, published by an Instance
+// via an atomic pointer swap and read lock-free on the trace-handling path.
+// Once published, the snapshot and the values it points to MUST be treated as
+// read-only by all holders.
 type Info struct {
 	Resource        *pcommon.Resource
 	ExtraAttributes *pcommon.Map
@@ -162,7 +163,7 @@ func readOnce(mappingAddr libpf.Address, rm remotememory.RemoteMemory, lastPubli
 	return ctx, nil
 }
 
-// Resolve reads the process context from a context mapping (if any) and merges
+// resolve reads the process context from a context mapping (if any) and merges
 // attributes derived from OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES.
 // Returns (info, true) if process context has changed, and  (_, false)
 // to leave the previously-published context untouched.
@@ -174,7 +175,7 @@ func readOnce(mappingAddr libpf.Address, rm remotememory.RemoteMemory, lastPubli
 // newProcessOrExec=true means either first sync or an exec was detected:
 // old process context is discarded and a rebuild is forced so new env vars
 // take effect even when context mapping is present.
-func Resolve(
+func resolve(
 	mappingAddr uint64, pid libpf.PID, rm remotememory.RemoteMemory,
 	oldPublishedAtNs uint64,
 	envVars map[libpf.String]libpf.String,
@@ -439,29 +440,45 @@ func parseResourceAttributes(raw string) ([]resourceAttribute, error) {
 	return pairs, nil
 }
 
-// ResourceToContextKey returns a stable key derived from the
-// (service.namespace, service.name, service.instance.id) triplet which the
-// OTel semantic conventions describe as globally unique for a service
-// instance.
-// See: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/registry/attributes/service.md
-//
-// Returns libpf.NullString only when resource is nil or none of the three
-// attributes is present. When at least one is present, the result joins all
-// three with ':' (missing components render as empty strings); callers
-// should treat the null sentinel as "unidentifiable" and may choose to
-// group such samples by other fields.
-func ResourceToContextKey(resource *pcommon.Resource) libpf.String {
-	if resource == nil {
-		return libpf.NullString
+// Instance holds the per-PID OTel process-context state. The process manager
+// creates one per tracked PID, drives it with Synchronize, and reads the
+// resolved resource with TraceContribution. The resolved Info snapshot is
+// swapped atomically so the trace-handling path can read it lock-free; Info is
+// immutable once published.
+type Instance struct {
+	pid libpf.PID
+	rm  remotememory.RemoteMemory
+	ctx atomic.Pointer[Info]
+}
+
+// NewInstance returns a process-context Instance for the given PID.
+func NewInstance(pid libpf.PID, rm remotememory.RemoteMemory) *Instance {
+	return &Instance{pid: pid, rm: rm}
+}
+
+// Synchronize reads the process context (if the OTEL_CTX mapping is present) and
+// merges attributes derived from OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES,
+// publishing a new snapshot when the context has changed. contextMappingAddr is
+// the address of the OTEL_CTX mapping observed this sync (0 if absent);
+// newProcessOrExec is true on the first sync of a PID or when an exec is seen.
+func (i *Instance) Synchronize(contextMappingAddr uint64,
+	envVars map[libpf.String]libpf.String, newProcessOrExec bool,
+) {
+	var oldPublishedAtNs uint64
+	if info := i.ctx.Load(); info != nil {
+		oldPublishedAtNs = info.PublishedAtNs
 	}
-	serviceNamespace, namespaceOk := resource.Attributes().Get(string(semconv.ServiceNamespaceKey))
-	serviceName, nameOk := resource.Attributes().Get(string(semconv.ServiceNameKey))
-	serviceInstanceID, instanceIdOk := resource.Attributes().Get(string(semconv.ServiceInstanceIDKey))
-	// If all three attributes are missing, return an empty string instead of ":::" to ensure that nil resource
-	// and empty resource are treated as the same.
-	if !namespaceOk && !nameOk && !instanceIdOk {
-		return libpf.NullString
+	info, publish := resolve(contextMappingAddr, i.pid, i.rm,
+		oldPublishedAtNs, envVars, newProcessOrExec)
+	if publish {
+		i.ctx.Store(&info)
 	}
-	return libpf.Intern(fmt.Sprintf("%s:%s:%s",
-		serviceNamespace.Str(), serviceName.Str(), serviceInstanceID.Str()))
+}
+
+// TraceContribution returns the resolved OTel resource for the process, or nil.
+func (i *Instance) TraceContribution() *pcommon.Resource {
+	if info := i.ctx.Load(); info != nil {
+		return info.Resource
+	}
+	return nil
 }

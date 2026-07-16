@@ -14,6 +14,7 @@ import (
 
 	lru "github.com/elastic/go-freelru"
 	"github.com/zeebo/xxh3"
+
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
@@ -21,6 +22,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/processctx"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
@@ -28,7 +30,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/processcontext"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -89,7 +90,7 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 	if includeEnvVars == nil {
 		includeEnvVars = make(libpf.Set[string])
 	}
-	for _, env := range processcontext.EnvVars() {
+	for _, env := range processctx.EnvVars() {
 		includeEnvVars[env] = libpf.Void{}
 	}
 
@@ -128,6 +129,7 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 		interpreterTracerEnabled: em.NumInterpreterLoaders() > 0,
 		eim:                      em,
 		interpreters:             interpreters,
+		processInstances:         make(map[libpf.PID]*processctx.Instance),
 		exitEvents:               make(map[libpf.PID]times.KTime),
 		pidToProcessInfo:         make(map[libpf.PID]*processInfo),
 		ebpf:                     cfg.EbpfHandler,
@@ -354,7 +356,6 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 		ProfileType:    profileType,
 		Value:          bpfTrace.Value,
 		EnvVars:        bpfTrace.EnvVars,
-		Resource:       bpfTrace.Resource,
 		TraceID:        bpfTrace.APMTraceID,
 		SpanID:         bpfTrace.APMTransactionID,
 	}
@@ -413,8 +414,13 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 			log.Warnf("Failed to release resources for %d: %v", pid, err)
 		}
 	}
+
+	instance := pm.processInstances[pid]
 	pm.mu.RUnlock()
 
+	if instance != nil {
+		meta.Resource = instance.TraceContribution()
+	}
 	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace, 1)
 
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {

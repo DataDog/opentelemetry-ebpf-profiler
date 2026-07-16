@@ -51,7 +51,7 @@ all: ebpf-profiler
 clean:
 	@go clean -cache -i
 	@$(MAKE) -s -C support/ebpf clean
-	@$(MAKE) -C processcontext/integrationtests/testdata clean
+	@$(MAKE) -C interpreter/processctx/integrationtests/testdata clean
 	@chmod -Rf u+w go/ || true
 	@rm -rf go .cache support/*.test interpreter/go/integrationtests/pprof_1_*
 	@rm -f otelcol-ebpf-profiler cmd/otelcol-ebpf-profiler/{*.go,go.mod,go.sum} || true
@@ -145,12 +145,12 @@ test-deps: $(GOLABELS_TESTDATA_TARGETS)
 TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf kallsyms support interpreter/go/integrationtests
 
 processctx-execs:
-	$(MAKE) -C processcontext/integrationtests/testdata
+	$(MAKE) -C interpreter/processctx/integrationtests/testdata
 
 # Runs on the host (not qemu): the runtime differs from the qemu-based
 # integration suite, so it uses a dedicated build tag.
 host-integration-tests: processctx-execs
-	go test -exec sudo -v -tags host_integration ./processcontext/integrationtests/
+	go test -exec sudo -v -tags host_integration ./interpreter/processctx/integrationtests/
 
 pprof-execs: pprof_1_23 pprof_1_24 pprof_1_24_cgo pprof_1_24_cgo_pie pprof_stable pprof_stable_buildinfo_cgo pprof_stable_cgo pprof_stable_cgo_pie
 

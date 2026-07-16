@@ -215,6 +215,8 @@ func TestReportTraceEventResourceKeyContextKey(t *testing.T) {
 	}
 
 	now := libpf.UnixTime64(time.Now().UnixNano())
+	// The reporter derives the dedup ContextKey from meta.Resource via
+	// resourceToContextKey; this verifies that grouping.
 	baseMeta := func(resource *pcommon.Resource) *samples.TraceEventMeta {
 		return &samples.TraceEventMeta{
 			Timestamp:      now,
@@ -239,11 +241,11 @@ func TestReportTraceEventResourceKeyContextKey(t *testing.T) {
 	resB := makeResource("ns", "svc", "instance-2")
 	require.NoError(t, reporter.ReportTraceEvent(trace, baseMeta(resB)))
 
-	// Partial triplet (only service.name) -> non-null key ":svc:" -> third bucket.
+	// Partial triplet (only service.name) -> key ":svc:" -> third bucket.
 	resPartial := makeResource("", "svc", "")
 	require.NoError(t, reporter.ReportTraceEvent(trace, baseMeta(resPartial)))
 
-	// Nil Resource -> ContextKey is NullString -> fourth bucket.
+	// Nil resource -> NullString key -> fourth bucket.
 	require.NoError(t, reporter.ReportTraceEvent(trace, baseMeta(nil)))
 
 	treePtr := reporter.traceEvents.RLock()

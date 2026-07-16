@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
+
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
-	"go.opentelemetry.io/ebpf-profiler/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
@@ -62,7 +64,7 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 		ContainerID:    meta.ContainerID,
 		PID:            int64(meta.PID),
 		ExecutablePath: meta.ExecutablePath,
-		ContextKey:     processcontext.ResourceToContextKey(meta.Resource),
+		ContextKey:     resourceToContextKey(meta.Resource),
 	}
 	traceHash := traceutil.HashTrace(trace)
 
@@ -104,4 +106,30 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 		Labels:     trace.CustomLabels,
 	}
 	return nil
+}
+
+// resourceToContextKey returns a stable key derived from the
+// (service.namespace, service.name, service.instance.id) triplet which the
+// OTel semantic conventions describe as globally unique for a service instance.
+// See: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/registry/attributes/service.md
+//
+// Returns libpf.NullString only when resource is nil or none of the three
+// attributes is present. When at least one is present, the result joins all
+// three with ':' (missing components render as empty strings); callers should
+// treat the null sentinel as "unidentifiable" and may choose to group such
+// samples by other fields.
+func resourceToContextKey(resource *pcommon.Resource) libpf.String {
+	if resource == nil {
+		return libpf.NullString
+	}
+	serviceNamespace, namespaceOk := resource.Attributes().Get(string(semconv.ServiceNamespaceKey))
+	serviceName, nameOk := resource.Attributes().Get(string(semconv.ServiceNameKey))
+	serviceInstanceID, instanceIdOk := resource.Attributes().Get(string(semconv.ServiceInstanceIDKey))
+	// If all three attributes are missing, return an empty string instead of ":::"
+	// to ensure that nil resource and empty resource are treated as the same.
+	if !namespaceOk && !nameOk && !instanceIdOk {
+		return libpf.NullString
+	}
+	return libpf.Intern(fmt.Sprintf("%s:%s:%s",
+		serviceNamespace.Str(), serviceName.Str(), serviceInstanceID.Str()))
 }
