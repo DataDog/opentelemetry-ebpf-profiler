@@ -115,7 +115,6 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 		interpreterTracerEnabled: em.NumInterpreterLoaders() > 0,
 		eim:                      em,
 		interpreters:             interpreters,
-		runtimeInfos:             make(map[libpf.PID]runtimeInfo),
 		exitEvents:               make(map[libpf.PID]times.KTime),
 		pidToProcessInfo:         make(map[libpf.PID]*processInfo),
 		ebpf:                     cfg.EbpfHandler,
@@ -401,9 +400,10 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 		}
 	}
 	// Attach the detected runtime version for OTLP process.runtime.* emission.
-	if ri, ok := pm.runtimeInfos[pid]; ok {
-		meta.RuntimeName = ri.name
-		meta.RuntimeVersion = ri.version
+	// Resolved per-process in SynchronizeProcess and stored on ProcessMeta.
+	if info, ok := pm.pidToProcessInfo[pid]; ok {
+		meta.RuntimeName = info.meta.RuntimeName
+		meta.RuntimeVersion = info.meta.RuntimeVersion
 	}
 	pm.mu.RUnlock()
 

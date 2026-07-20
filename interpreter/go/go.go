@@ -70,6 +70,10 @@ func (d *goData) RuntimeInfo() (string, string, bool) {
 	return "go", strings.TrimPrefix(d.goVersion, "go"), true
 }
 
+func (g *goInstance) RuntimeInfo() (string, string, bool) {
+	return g.d.RuntimeInfo()
+}
+
 func (d *goData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	_ libpf.Address, _ remotememory.RemoteMemory) (interpreter.Instance, error) {
 	if err := ebpf.UpdateProcData(libpf.Go, pid, unsafe.Pointer(&d.offsets)); err != nil {

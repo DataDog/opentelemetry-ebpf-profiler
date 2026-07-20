@@ -118,6 +118,13 @@ type ProcessMeta struct {
 	ContainerID libpf.String
 	// process context
 	ProcessContextInfo processcontext.Info
+	// RuntimeName is the detected language runtime family (e.g. "cpython"),
+	// emitted as the process.runtime.name OTLP resource attribute. Empty until
+	// resolved.
+	RuntimeName string
+	// RuntimeVersion is the detected runtime version (e.g. "3.11.4"), emitted as
+	// the process.runtime.version OTLP resource attribute.
+	RuntimeVersion string
 }
 
 // Process is the interface to inspect ELF coredump/process.

@@ -161,6 +161,10 @@ func (d *pythonData) RuntimeInfo() (string, string, bool) {
 	return "cpython", d.fullVersion, true
 }
 
+func (p *pythonInstance) RuntimeInfo() (string, string, bool) {
+	return p.d.RuntimeInfo()
+}
+
 func (d *pythonData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.Address,
 	rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {

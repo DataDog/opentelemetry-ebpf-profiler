@@ -58,11 +58,6 @@ type ProcessManager struct {
 	// the unique on-disk identifier of the interpreter DSO.
 	interpreters map[libpf.PID]map[util.OnDiskFileIdentifier]interpreter.Instance
 
-	// runtimeInfos records the language runtime (name + full version) detected
-	// for each PID, for emission as OTLP process.runtime.* resource attributes.
-	// The most recently attached interpreter reporting RuntimeInfo(ok=true) wins
-	runtimeInfos map[libpf.PID]runtimeInfo
-
 	// pidToProcessInfo keeps track of the executable memory mappings.
 	pidToProcessInfo map[libpf.PID]*processInfo
 
@@ -130,16 +125,6 @@ type ProcessManager struct {
 	selfContainerID libpf.String
 }
 
-// runtimeInfo holds the detected language runtime family and full version for a
-// process, used to populate process.runtime.* OTLP resource attributes.
-type runtimeInfo struct {
-	name    string
-	version string
-	// oid identifies the interpreter DSO that reported this runtime, so the
-	// entry can be dropped when that specific interpreter detaches
-	oid util.OnDiskFileIdentifier
-}
-
 // Mapping represents an executable memory mapping of a process.
 type Mapping struct {
 	// Vaddr represents the starting virtual address of the mapping.
@@ -169,7 +154,7 @@ func (m *Mapping) GetOnDiskFileIdentifier() util.OnDiskFileIdentifier {
 // processInfo contains information about the executable mappings
 // and Thread Specific Data of a process.
 type processInfo struct {
-	// process metadata, fixed for process lifetime (read-only)
+	// process metadata; updated in place by SynchronizeProcess (not immutable)
 	meta process.ProcessMeta
 	// executable mappings sorted by FileID and mapping start address
 	mappings []Mapping

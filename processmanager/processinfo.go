@@ -215,12 +215,6 @@ func (pm *ProcessManager) handleNewInterpreter(pr process.Process, bias libpf.Ad
 	log.Debugf("Attached to %v interpreter in PID %v", data, pid)
 	pm.assignInterpreter(pid, oid, instance)
 
-	// Record the runtime version for OTLP process.runtime.* emission. The most recently
-	// attached interpreter reporting a runtime wins
-	if name, version, ok := data.RuntimeInfo(); ok {
-		pm.runtimeInfos[pid] = runtimeInfo{name: name, version: version, oid: oid}
-	}
-
 	if libcInfo := pm.getLibcInfo(pid); libcInfo != nil {
 		err = instance.UpdateLibcInfo(pm.ebpf, pid, *libcInfo)
 		if err != nil {
@@ -365,20 +359,12 @@ func (pm *ProcessManager) processRemovedInterpreters(pid libpf.PID,
 				pid, err)
 		}
 		delete(pm.interpreters[pid], key)
-		// Drop the runtime info if it came from the interpreter being detached,
-		// so an exec into a different interpreter/version doesn't keep emitting
-		// the previous runtime. A concurrently or subsequently attached
-		// interpreter has already repopulated it under its own oid.
-		if ri, ok := pm.runtimeInfos[pid]; ok && ri.oid == key {
-			delete(pm.runtimeInfos, pid)
-		}
 	}
 
 	if len(pm.interpreters[pid]) == 0 {
 		// There are no longer any mapped interpreters in the process, therefore we can
 		// remove the entry.
 		delete(pm.interpreters, pid)
-		delete(pm.runtimeInfos, pid)
 	}
 	return anonymousMappingsWanted
 }
@@ -804,6 +790,19 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		}
 	}
 
+	// Resolve the process runtime for OTLP process.runtime.* emission.
+	pm.mu.Lock()
+	if info, ok := pm.pidToProcessInfo[pid]; ok && info.meta.RuntimeName == "" {
+		for _, instance := range pm.interpreters[pid] {
+			if name, version, ok := instance.RuntimeInfo(); ok {
+				info.meta.RuntimeName = name
+				info.meta.RuntimeVersion = version
+				break
+			}
+		}
+	}
+	pm.mu.Unlock()
+
 	if len(mpAdd) > 0 || len(mpRemove) > 0 || len(interpreters) > 0 {
 		log.Debugf("Added %v mappings, removed %v mappings for PID %v with %d interpreters",
 			len(mpAdd), len(mpRemove), pid, len(interpreters))
@@ -930,7 +929,6 @@ func (pm *ProcessManager) ProcessedUntil(traceCaptureKTime times.KTime) {
 			}
 		}
 		delete(pm.interpreters, pid)
-		delete(pm.runtimeInfos, pid)
 		delete(pm.exitEvents, pid)
 		log.Debugf("PID %v exit latency %v ms", pid, (nowKTime-pidExitKTime)/1e6)
 	}

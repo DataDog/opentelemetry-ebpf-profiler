@@ -67,17 +67,6 @@ func (m *MultiData) Unload(ebpf EbpfHandler) {
 	}
 }
 
-// RuntimeInfo returns the runtime info of the first wrapped interpreter that
-// reports one (ok=true), or ok=false if none do.
-func (m *MultiData) RuntimeInfo() (string, string, bool) {
-	for _, data := range m.interpreters {
-		if name, version, ok := data.RuntimeInfo(); ok {
-			return name, version, ok
-		}
-	}
-	return "", "", false
-}
-
 // MultiInstance implements the Instance interface for multiple interpreters.
 type MultiInstance struct {
 	instances []Instance
@@ -172,4 +161,15 @@ func (m *MultiInstance) ReleaseResources() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// RuntimeInfo returns the runtime info of the first wrapped instance that
+// reports one (ok=true), or ok=false if none do.
+func (m *MultiInstance) RuntimeInfo() (string, string, bool) {
+	for _, instance := range m.instances {
+		if name, version, ok := instance.RuntimeInfo(); ok {
+			return name, version, ok
+		}
+	}
+	return "", "", false
 }

@@ -287,6 +287,10 @@ func (d *beamData) RuntimeInfo() (string, string, bool) {
 	return "erlang", fmt.Sprintf("%d", d.otpRelease), true
 }
 
+func (i *beamInstance) RuntimeInfo() (string, string, bool) {
+	return i.data.RuntimeInfo()
+}
+
 func hashMFA(key beamMfa) uint32 {
 	mfhash := uint32(hash.Uint64(uint64(key.module)<<32 | uint64(key.function)))
 	return uint32(hash.Uint64(uint64(mfhash)<<32 | uint64(key.arity)))

@@ -311,6 +311,10 @@ func (r *rubyData) RuntimeInfo() (string, string, bool) {
 	return "ruby", fmt.Sprintf("%d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff), true
 }
 
+func (r *rubyInstance) RuntimeInfo() (string, string, bool) {
+	return r.r.RuntimeInfo()
+}
+
 func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.Address,
 	rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {

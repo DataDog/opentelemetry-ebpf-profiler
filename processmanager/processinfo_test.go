@@ -64,10 +64,6 @@ func (td *testInterpreterData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PI
 
 func (td *testInterpreterData) Unload(interpreter.EbpfHandler) {}
 
-func (td *testInterpreterData) RuntimeInfo() (string, string, bool) {
-	return "", "", false
-}
-
 type testEbpfHandler struct {
 	pidPageMappingInfoUpdates []struct {
 		pid    libpf.PID

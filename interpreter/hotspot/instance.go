@@ -853,6 +853,10 @@ func (d *hotspotInstance) updateStubMappings(vmd *hotspotVMData,
 	}
 }
 
+func (d *hotspotInstance) RuntimeInfo() (string, string, bool) {
+	return d.d.RuntimeInfo()
+}
+
 func (d *hotspotInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 	_ reporter.ExecutableReporter, pr process.Process, _ []process.RawMapping,
 ) error {

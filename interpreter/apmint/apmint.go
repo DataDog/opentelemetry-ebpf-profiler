@@ -110,10 +110,6 @@ func (d data) String() string {
 	return "APM integration"
 }
 
-func (d data) RuntimeInfo() (string, string, bool) {
-	return "", "", false
-}
-
 func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	bias libpf.Address, rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {

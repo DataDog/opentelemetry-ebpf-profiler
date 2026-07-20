@@ -247,10 +247,6 @@ func (d *opcacheData) String() string {
 	return fmt.Sprintf("Opcache %d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff)
 }
 
-func (d *opcacheData) RuntimeInfo() (string, string, bool) {
-	return "", "", false
-}
-
 func (d *opcacheData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.Address,
 	rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {

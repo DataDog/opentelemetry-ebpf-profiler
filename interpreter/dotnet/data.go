@@ -209,6 +209,10 @@ func (d *dotnetData) RuntimeInfo() (string, string, bool) {
 	return "dotnet", fmt.Sprintf("%d.%d.%d", (ver>>24)&0xff, (ver>>16)&0xff, ver&0xffff), true
 }
 
+func (i *dotnetInstance) RuntimeInfo() (string, string, bool) {
+	return i.d.RuntimeInfo()
+}
+
 func (d *dotnetData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.Address,
 	rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {

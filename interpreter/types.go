@@ -129,9 +129,6 @@ type Data interface {
 
 	// Unload can undo any allocations or eBPF entries the Loader function created
 	Unload(ebpf EbpfHandler)
-
-	// RuntimeInfo returns the runtime family name and full version
-	RuntimeInfo() (name string, version string, ok bool)
 }
 
 // Instance is the interface to operate on per-PID data.
@@ -177,4 +174,8 @@ type Instance interface {
 
 	// Release resources that are used to symbolize a stack.
 	ReleaseResources() error
+
+	// RuntimeInfo returns the runtime family name and full version for source
+	// resolution, e.g. ("cpython", "3.11.4"). Returns ok=false if not applicable.
+	RuntimeInfo() (name string, version string, ok bool)
 }
