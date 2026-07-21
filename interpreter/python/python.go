@@ -157,12 +157,8 @@ func (d *pythonData) String() string {
 	return fmt.Sprintf("Python %d.%d", d.version>>8, d.version&0xff)
 }
 
-func (d *pythonData) RuntimeInfo() (string, string, bool) {
-	return "cpython", d.fullVersion, true
-}
-
 func (p *pythonInstance) RuntimeInfo() (string, string, bool) {
-	return p.d.RuntimeInfo()
+	return "cpython", p.d.fullVersion, true
 }
 
 func (d *pythonData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.Address,

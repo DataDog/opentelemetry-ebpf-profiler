@@ -119,15 +119,6 @@ func (d *perlData) String() string {
 	return fmt.Sprintf("Perl %d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff)
 }
 
-func (d *perlData) RuntimeInfo() (string, string, bool) {
-	ver := d.version
-	return "perl", fmt.Sprintf("%d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff), true
-}
-
-func (i *perlInstance) RuntimeInfo() (string, string, bool) {
-	return i.d.RuntimeInfo()
-}
-
 func (d *perlData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.Address,
 	rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {

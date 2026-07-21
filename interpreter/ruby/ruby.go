@@ -306,13 +306,9 @@ func (r *rubyData) String() string {
 	return fmt.Sprintf("Ruby %d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff)
 }
 
-func (r *rubyData) RuntimeInfo() (string, string, bool) {
-	ver := r.version
-	return "ruby", fmt.Sprintf("%d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff), true
-}
-
 func (r *rubyInstance) RuntimeInfo() (string, string, bool) {
-	return r.r.RuntimeInfo()
+	ver := r.r.version
+	return "ruby", fmt.Sprintf("%d.%d.%d", (ver>>16)&0xff, (ver>>8)&0xff, ver&0xff), true
 }
 
 func (r *rubyData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.Address,

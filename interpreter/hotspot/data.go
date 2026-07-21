@@ -338,15 +338,6 @@ func (d *hotspotData) String() string {
 	return "<unintrospected JVM>"
 }
 
-func (d *hotspotData) RuntimeInfo() (string, string, bool) {
-	vmd := d.Get()
-	if vmd == nil {
-		return "", "", false
-	}
-	return "openjdk", fmt.Sprintf("%d.%d.%d",
-		(vmd.version>>24)&0xff, (vmd.version>>16)&0xff, (vmd.version>>8)&0xff), true
-}
-
 // Attach loads to the ebpf program the needed pointers and sizes to unwind given hotspot process.
 // As the hotspot unwinder depends on the native unwinder, a part of the cleanup is done by the
 // process manager and not the corresponding Detach() function of hotspot objects.

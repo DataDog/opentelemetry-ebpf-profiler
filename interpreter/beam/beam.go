@@ -281,14 +281,10 @@ func (d *beamData) String() string {
 	return fmt.Sprintf("BEAM OTP %d, ERTS %s", d.otpRelease, d.ertsVersion)
 }
 
-func (d *beamData) RuntimeInfo() (string, string, bool) {
-	// The OTP release (e.g. 26) keys the erlang/otp source and not the finer ERTS
-	// version (d.ertsVersion)
-	return "erlang", fmt.Sprintf("%d", d.otpRelease), true
-}
-
 func (i *beamInstance) RuntimeInfo() (string, string, bool) {
-	return i.data.RuntimeInfo()
+	// The OTP release (e.g. 26) keys the erlang/otp source and not the finer ERTS
+	// version (i.data.ertsVersion)
+	return "erlang", fmt.Sprintf("%d", i.data.otpRelease), true
 }
 
 func hashMFA(key beamMfa) uint32 {
