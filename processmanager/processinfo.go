@@ -225,6 +225,25 @@ func (pm *ProcessManager) handleNewInterpreter(pr process.Process, bias libpf.Ad
 	return anonymousMappingsWanted || instance.UsesAnonymousMappings(), nil
 }
 
+// selectProcessRuntime picks the runtime to emit as process.runtime.* for a
+// process that may have multiple runtimes. It prefers the top-level runtime,
+// i.e. the one whose DSO is the process's own executable (identified by exeOID),
+// and falls back to the first interpreter reporting runtime info
+func selectProcessRuntime(interps map[util.OnDiskFileIdentifier]interpreter.Instance,
+	exeOID util.OnDiskFileIdentifier) (name, version string) {
+	if inst, ok := interps[exeOID]; ok {
+		if n, v, ok := inst.RuntimeInfo(); ok {
+			return n, v
+		}
+	}
+	for _, inst := range interps {
+		if n, v, ok := inst.RuntimeInfo(); ok {
+			return n, v
+		}
+	}
+	return "", ""
+}
+
 func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.RawMapping,
 	elfRef *pfelf.Reference,
 ) elfInfo {
@@ -618,6 +637,9 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	mappings := make([]Mapping, 0, capHint)
 	mpAdd := make([]*Mapping, 0, capHint)
 	var processContextInfo processcontext.Info
+	// exeOID is the on-disk identity of the process's main executable, used by
+	// the runtime recompute below to prefer the top-level runtime.
+	var exeOID util.OnDiskFileIdentifier
 
 	pm.mappingStats.numProcAttempts.Add(1)
 	start := time.Now()
@@ -649,6 +671,11 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		m.Path = libpf.Intern(m.Path).String()
 
 		if mappingNeeded {
+			if exeOID == (util.OnDiskFileIdentifier{}) && exe != libpf.NullString &&
+				m.Path == exe.String() {
+				exeOID = m.GetOnDiskFileIdentifier()
+			}
+
 			var fm libpf.FrameMapping
 			if oldm, ok := mpRemove[m.Vaddr]; ok {
 				if oldm.Length == m.Length && oldm.Device == m.Device && oldm.Inode == m.Inode {
@@ -793,13 +820,8 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	// Resolve the process runtime for OTLP process.runtime.* emission.
 	pm.mu.Lock()
 	if info, ok := pm.pidToProcessInfo[pid]; ok && info.meta.RuntimeName == "" {
-		for _, instance := range pm.interpreters[pid] {
-			if name, version, ok := instance.RuntimeInfo(); ok {
-				info.meta.RuntimeName = name
-				info.meta.RuntimeVersion = version
-				break
-			}
-		}
+		info.meta.RuntimeName, info.meta.RuntimeVersion =
+			selectProcessRuntime(pm.interpreters[pid], exeOID)
 	}
 	pm.mu.Unlock()
 

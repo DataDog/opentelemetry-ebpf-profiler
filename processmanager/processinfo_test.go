@@ -201,6 +201,69 @@ func (tp *testProcess) OpenELF(string) (*pfelf.File, error) {
 	return nil, errors.New("not implemented")
 }
 
+type runtimeInstance struct {
+	interpreter.InstanceStubs
+	name    string
+	version string
+	ok      bool
+}
+
+func (r *runtimeInstance) RuntimeInfo() (string, string, bool) {
+	return r.name, r.version, r.ok
+}
+
+func (r *runtimeInstance) Detach(interpreter.EbpfHandler, libpf.PID) error {
+	return nil
+}
+
+func TestSelectProcessRuntime(t *testing.T) {
+	exeOID := util.OnDiskFileIdentifier{DeviceID: 1, InodeNum: 1}
+	libOID := util.OnDiskFileIdentifier{DeviceID: 1, InodeNum: 2}
+
+	tests := map[string]struct {
+		interps     map[util.OnDiskFileIdentifier]interpreter.Instance
+		exeOID      util.OnDiskFileIdentifier
+		wantName    string
+		wantVersion string
+	}{
+		"exe runtime wins over embedded runtime": {
+			interps: map[util.OnDiskFileIdentifier]interpreter.Instance{
+				exeOID: &runtimeInstance{name: "go", version: "1.23.4", ok: true},
+				libOID: &runtimeInstance{name: "cpython", version: "3.11.4", ok: true},
+			},
+			exeOID:      exeOID,
+			wantName:    "go",
+			wantVersion: "1.23.4",
+		},
+		"falls back to sole HLL when exe is a launcher": {
+			interps: map[util.OnDiskFileIdentifier]interpreter.Instance{
+				libOID: &runtimeInstance{name: "openjdk", version: "17.0.8", ok: true},
+			},
+			exeOID:      exeOID,
+			wantName:    "openjdk",
+			wantVersion: "17.0.8",
+		},
+		"exe runtime opting out yields nothing": {
+			interps: map[util.OnDiskFileIdentifier]interpreter.Instance{
+				exeOID: &runtimeInstance{ok: false},
+			},
+			exeOID: exeOID,
+		},
+		"no interpreters yields nothing": {
+			interps: map[util.OnDiskFileIdentifier]interpreter.Instance{},
+			exeOID:  exeOID,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			gotName, gotVersion := selectProcessRuntime(test.interps, test.exeOID)
+			assert.Equal(t, test.wantName, gotName)
+			assert.Equal(t, test.wantVersion, gotVersion)
+		})
+	}
+}
+
 func TestAssignLibcInfoMergesLibcInfo(t *testing.T) {
 	assert := assert.New(t)
 
