@@ -101,32 +101,34 @@ func (frames *Frames) Append(frame *Frame) {
 
 // Trace represents a stack trace.
 type Trace struct {
-	CustomLabels map[String]String
-	Frames       Frames
-	Hash         TraceHash
+	CustomLabels                  map[String]String
+	CustomLabelsFromThreadContext bool
+	Frames                        Frames
+	Hash                          TraceHash
 }
 
 // EbpfTrace represents a stack trace from Ebpf code.
 type EbpfTrace struct {
-	EnvVars          map[String]String
-	ProcessName      String
-	ExecutablePath   String
-	ContainerID      String
-	CustomLabels     map[String]String
-	Comm             String
-	Resource         *pcommon.Resource
-	FrameData        []uint64
-	KernelFrames     Frames
-	FrameDataBuf     [3072]uint64
-	Value            int64
-	KTime            int64
-	CpuID            uint32
-	TID              PID
-	PID              PID
-	NumFrames        uint16
-	Origin           Origin
-	APMTraceID       APMTraceID
-	APMTransactionID APMTransactionID
+	EnvVars                       map[String]String
+	ProcessName                   String
+	ExecutablePath                String
+	ContainerID                   String
+	CustomLabels                  map[String]String
+	CustomLabelsFromThreadContext bool
+	Comm                          String
+	Resource                      *pcommon.Resource
+	FrameData                     []uint64
+	KernelFrames                  Frames
+	FrameDataBuf                  [3072]uint64
+	Value                         int64
+	KTime                         int64
+	CpuID                         uint32
+	TID                           PID
+	PID                           PID
+	NumFrames                     uint16
+	Origin                        Origin
+	APMTraceID                    APMTraceID
+	APMTransactionID              APMTransactionID
 }
 
 type EbpfFrame []uint64

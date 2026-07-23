@@ -375,7 +375,7 @@ func TestGenerate_SingleContainerSingleOrigin(t *testing.T) {
 	resourceKey := samples.ResourceKey{
 		ExecutablePath: filePath,
 		PID:            123,
-		APMServiceName: "svc",
+		ServiceName:    "svc",
 		ContainerID:    libpf.Intern("container1"),
 	}
 	events := map[libpf.Origin]samples.SampleToEvents{
@@ -917,7 +917,7 @@ func TestGenerate_ProcessContextResource_NilResource(t *testing.T) {
 	tree := singleEventTree(samples.ResourceKey{
 		ExecutablePath: libpf.Intern("/bin/svc"),
 		PID:            99,
-		APMServiceName: "apm-svc",
+		ServiceName:    "apm-svc",
 	}, nil)
 
 	profiles, err := testGenerate(d, tree, "agent", "v1")

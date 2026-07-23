@@ -6,7 +6,11 @@ package reporter // import "go.opentelemetry.io/ebpf-profiler/reporter"
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
+
+	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
@@ -43,8 +47,103 @@ type baseReporter struct {
 
 var errUnknownOrigin = errors.New("unknown trace origin")
 
+const (
+	serviceNameKey               = "service.name"
+	serviceVersionKey            = "service.version"
+	deploymentEnvironmentNameKey = "deployment.environment.name"
+)
+
+var promotedThreadResourceAttributes = map[string]struct{}{
+	serviceNameKey:               {},
+	serviceVersionKey:            {},
+	deploymentEnvironmentNameKey: {},
+}
+
 func (b *baseReporter) Stop() {
 	b.runLoop.Stop()
+}
+
+// effectiveResource returns a per-sample resource in precedence order:
+// Process Context, SDK-published Thread Context, then the legacy APM service
+// name as a fallback when service.name is absent or empty.
+//
+// Process Context resources are shared and immutable, so this function copies
+// before applying overrides. A Thread Context attribute replaces a same-named
+// Process Context attribute. The resource-semantic attributes consumed by the
+// profiler are also promoted when absent from Process Context; all other Thread
+// Context attributes remain attached to the sample.
+func effectiveResource(
+	resource *pcommon.Resource,
+	apmServiceName string,
+	trace *libpf.Trace,
+) (*pcommon.Resource, libpf.String) {
+	hasThreadResourceAttribute := false
+	if trace.CustomLabelsFromThreadContext {
+		for key := range trace.CustomLabels {
+			name := key.String()
+			_, isPromoted := promotedThreadResourceAttributes[name]
+			existsInProcessResource := false
+			if resource != nil {
+				_, existsInProcessResource = resource.Attributes().Get(name)
+			}
+			if isPromoted || existsInProcessResource {
+				hasThreadResourceAttribute = true
+				break
+			}
+		}
+	}
+
+	if !hasThreadResourceAttribute {
+		if resourceString(resource, serviceNameKey) != "" || apmServiceName == "" {
+			return resource, libpf.NullString
+		}
+
+		effective := pcommon.NewResource()
+		if resource != nil {
+			resource.Attributes().CopyTo(effective.Attributes())
+		}
+		effective.Attributes().PutStr(serviceNameKey, apmServiceName)
+		return &effective, libpf.NullString
+	}
+
+	effective := pcommon.NewResource()
+	if resource != nil {
+		resource.Attributes().CopyTo(effective.Attributes())
+	}
+
+	var threadResourceParts []string
+	if trace.CustomLabelsFromThreadContext {
+		for key, value := range trace.CustomLabels {
+			name := key.String()
+			_, isPromoted := promotedThreadResourceAttributes[name]
+			_, existsInEffectiveResource := effective.Attributes().Get(name)
+			if isPromoted || existsInEffectiveResource {
+				valueString := value.String()
+				effective.Attributes().PutStr(name, valueString)
+				threadResourceParts = append(threadResourceParts,
+					fmt.Sprintf("%d:%s%d:%s", len(name), name, len(valueString), valueString))
+			}
+		}
+	}
+	if resourceString(&effective, serviceNameKey) == "" && apmServiceName != "" {
+		effective.Attributes().PutStr(serviceNameKey, apmServiceName)
+	}
+	if len(threadResourceParts) == 0 {
+		return &effective, libpf.NullString
+	}
+	sort.Strings(threadResourceParts)
+	return &effective, libpf.Intern(strings.Join(threadResourceParts, ""))
+}
+
+func resourceString(resource *pcommon.Resource, key string) string {
+	if resource == nil {
+		return ""
+	}
+	value, ok := resource.Attributes().Get(key)
+	if !ok || value.Type() != pcommon.ValueTypeStr {
+		return ""
+	}
+	return value.Str()
 }
 
 func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error {
@@ -62,12 +161,16 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 		extraMeta = b.cfg.ExtraSampleAttrProd.CollectExtraSampleMeta(trace, meta)
 	}
 
+	resource, threadResourceKey := effectiveResource(meta.Resource, meta.APMServiceName, trace)
 	key := samples.ResourceKey{
-		APMServiceName: meta.APMServiceName,
-		ContainerID:    meta.ContainerID,
-		PID:            int64(meta.PID),
-		ExecutablePath: meta.ExecutablePath,
-		ContextKey:     processcontext.ResourceToContextKey(meta.Resource),
+		ServiceName:           resourceString(resource, serviceNameKey),
+		ServiceVersion:        resourceString(resource, serviceVersionKey),
+		DeploymentEnvironment: resourceString(resource, deploymentEnvironmentNameKey),
+		ContainerID:           meta.ContainerID,
+		PID:                   int64(meta.PID),
+		ExecutablePath:        meta.ExecutablePath,
+		ContextKey:            processcontext.ResourceToContextKey(resource),
+		ThreadResourceKey:     threadResourceKey,
 	}
 
 	eventsTree := b.traceEvents.WLock()
@@ -76,7 +179,7 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 	if _, exists := (*eventsTree)[key]; !exists {
 		(*eventsTree)[key] = samples.ResourceToProfiles{
 			EnvVars:  meta.EnvVars,
-			Resource: meta.Resource,
+			Resource: resource,
 			Events:   make(map[libpf.Origin]samples.SampleToEvents),
 		}
 	}

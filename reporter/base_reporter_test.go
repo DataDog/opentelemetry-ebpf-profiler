@@ -246,3 +246,203 @@ func TestReportTraceEventResourceKeyContextKey(t *testing.T) {
 	assert.True(t, keys[libpf.Intern(":svc:")], "missing bucket for partial-triplet key")
 	assert.True(t, keys[libpf.NullString], "missing NullString bucket for nil resource")
 }
+
+func TestReportTraceEventThreadContextOverlaysProcessResource(t *testing.T) {
+	reporter := createTestBaseReporter(t, nil)
+
+	processResource := pcommon.NewResource()
+	processResource.Attributes().PutStr("service.name", "process-service")
+	processResource.Attributes().PutStr("service.version", "process-version")
+	processResource.Attributes().PutStr("deployment.environment.name", "process-env")
+	processResource.Attributes().PutStr("service.instance.id", "process-instance")
+	processResource.Attributes().PutStr("host.name", "process-host")
+	processResource.Attributes().PutStr("process-only", "unchanged")
+
+	trace := &libpf.Trace{
+		Hash:                          libpf.NewTraceHash(0x1, 0x0),
+		CustomLabelsFromThreadContext: true,
+		CustomLabels: map[libpf.String]libpf.String{
+			libpf.Intern("service.name"):                libpf.Intern("thread-service"),
+			libpf.Intern("service.version"):             libpf.Intern("thread-version"),
+			libpf.Intern("deployment.environment.name"): libpf.Intern("thread-env"),
+			libpf.Intern("service.instance.id"):         libpf.Intern("thread-instance"),
+			libpf.Intern("host.name"):                   libpf.Intern("thread-host"),
+			libpf.Intern("http.route"):                  libpf.Intern("/not-a-resource"),
+		},
+	}
+	meta := &samples.TraceEventMeta{
+		Timestamp:      libpf.UnixTime64(time.Now().UnixNano()),
+		ExecutablePath: libpf.Intern("/usr/bin/php"),
+		APMServiceName: "legacy-apm-service",
+		PID:            1234,
+		TID:            1235,
+		Origin:         support.TraceOriginSampling,
+		Resource:       &processResource,
+	}
+
+	require.NoError(t, reporter.ReportTraceEvent(trace, meta))
+
+	treePtr := reporter.traceEvents.RLock()
+	defer reporter.traceEvents.RUnlock(&treePtr)
+	tree := *treePtr
+	require.Len(t, tree, 1)
+
+	for key, profiles := range tree {
+		assert.Equal(t, "thread-service", key.ServiceName)
+		assert.Equal(t, "thread-version", key.ServiceVersion)
+		assert.Equal(t, "thread-env", key.DeploymentEnvironment)
+		assert.Equal(t, ":thread-service:thread-instance", key.ContextKey.String())
+
+		require.NotNil(t, profiles.Resource)
+		assert.Equal(t, map[string]any{
+			"service.name":                "thread-service",
+			"service.version":             "thread-version",
+			"deployment.environment.name": "thread-env",
+			"service.instance.id":         "thread-instance",
+			"host.name":                   "thread-host",
+			"process-only":                "unchanged",
+		}, profiles.Resource.Attributes().AsRaw())
+		_, promoted := profiles.Resource.Attributes().Get("http.route")
+		assert.False(t, promoted, "sample-only attributes must not be promoted")
+	}
+
+	// The shared Process Context resource remains immutable.
+	assert.Equal(t, "process-service",
+		processResource.Attributes().AsRaw()["service.name"])
+	assert.Equal(t, "process-host",
+		processResource.Attributes().AsRaw()["host.name"])
+}
+
+func TestReportTraceEventThreadResourceOverridesCreateDistinctBuckets(t *testing.T) {
+	reporter := createTestBaseReporter(t, nil)
+	processResource := pcommon.NewResource()
+	processResource.Attributes().PutStr("service.name", "process-service")
+
+	meta := &samples.TraceEventMeta{
+		Timestamp: libpf.UnixTime64(time.Now().UnixNano()),
+		PID:       1234,
+		TID:       1235,
+		Origin:    support.TraceOriginSampling,
+		Resource:  &processResource,
+	}
+	makeTrace := func(version string) *libpf.Trace {
+		return &libpf.Trace{
+			Hash:                          libpf.NewTraceHash(0x1, 0x0),
+			CustomLabelsFromThreadContext: true,
+			CustomLabels: map[libpf.String]libpf.String{
+				libpf.Intern("service.version"): libpf.Intern(version),
+			},
+		}
+	}
+
+	require.NoError(t, reporter.ReportTraceEvent(makeTrace("v1"), meta))
+	require.NoError(t, reporter.ReportTraceEvent(makeTrace("v2"), meta))
+
+	treePtr := reporter.traceEvents.RLock()
+	defer reporter.traceEvents.RUnlock(&treePtr)
+	assert.Len(t, *treePtr, 2)
+}
+
+func TestReportTraceEventAPMServiceNameIsFallback(t *testing.T) {
+	stringPtr := func(value string) *string {
+		return &value
+	}
+	tests := []struct {
+		name           string
+		processService string
+		threadService  *string
+		expected       string
+	}{
+		{
+			name:           "process context wins",
+			processService: "process-service",
+			expected:       "process-service",
+		},
+		{
+			name:     "APM fills missing service",
+			expected: "legacy-apm-service",
+		},
+		{
+			name:           "thread context wins",
+			processService: "process-service",
+			threadService:  stringPtr("thread-service"),
+			expected:       "thread-service",
+		},
+		{
+			name:           "APM fills service cleared by thread context",
+			processService: "process-service",
+			threadService:  stringPtr(""),
+			expected:       "legacy-apm-service",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reporter := createTestBaseReporter(t, nil)
+			processResource := pcommon.NewResource()
+			if test.processService != "" {
+				processResource.Attributes().PutStr("service.name", test.processService)
+			}
+
+			trace := &libpf.Trace{Hash: libpf.NewTraceHash(0x1, 0x0)}
+			if test.threadService != nil {
+				trace.CustomLabelsFromThreadContext = true
+				trace.CustomLabels = map[libpf.String]libpf.String{
+					libpf.Intern("service.name"): libpf.Intern(*test.threadService),
+				}
+			}
+			meta := &samples.TraceEventMeta{
+				Timestamp:      libpf.UnixTime64(time.Now().UnixNano()),
+				APMServiceName: "legacy-apm-service",
+				PID:            1234,
+				TID:            1235,
+				Origin:         support.TraceOriginSampling,
+				Resource:       &processResource,
+			}
+
+			require.NoError(t, reporter.ReportTraceEvent(trace, meta))
+
+			treePtr := reporter.traceEvents.RLock()
+			defer reporter.traceEvents.RUnlock(&treePtr)
+			require.Len(t, *treePtr, 1)
+			for key, profiles := range *treePtr {
+				assert.Equal(t, test.expected, key.ServiceName)
+				require.NotNil(t, profiles.Resource)
+				assert.Equal(t, test.expected,
+					profiles.Resource.Attributes().AsRaw()["service.name"])
+			}
+		})
+	}
+}
+
+func TestReportTraceEventGoLabelsDoNotOverrideResource(t *testing.T) {
+	reporter := createTestBaseReporter(t, nil)
+	processResource := pcommon.NewResource()
+	processResource.Attributes().PutStr("service.name", "process-service")
+
+	trace := &libpf.Trace{
+		Hash: libpf.NewTraceHash(0x1, 0x0),
+		CustomLabels: map[libpf.String]libpf.String{
+			libpf.Intern("service.name"): libpf.Intern("go-label-service"),
+		},
+	}
+	meta := &samples.TraceEventMeta{
+		Timestamp:      libpf.UnixTime64(time.Now().UnixNano()),
+		APMServiceName: "legacy-apm-service",
+		PID:            1234,
+		TID:            1235,
+		Origin:         support.TraceOriginSampling,
+		Resource:       &processResource,
+	}
+
+	require.NoError(t, reporter.ReportTraceEvent(trace, meta))
+
+	treePtr := reporter.traceEvents.RLock()
+	defer reporter.traceEvents.RUnlock(&treePtr)
+	require.Len(t, *treePtr, 1)
+	for key, profiles := range *treePtr {
+		assert.Equal(t, "process-service", key.ServiceName)
+		assert.Equal(t, "process-service",
+			profiles.Resource.Attributes().AsRaw()["service.name"])
+	}
+}

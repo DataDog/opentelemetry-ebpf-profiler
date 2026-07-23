@@ -1083,6 +1083,7 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 		}
 	case support.CustomLabelsTypeNative:
 		trace.CustomLabels = procMeta.ProcessContextInfo.DecodeThreadLabels(ptr.Custom_labels_data.Data[:ptr.Custom_labels_data.Size])
+		trace.CustomLabelsFromThreadContext = true
 	}
 
 	trace.NumFrames = ptr.Num_frames

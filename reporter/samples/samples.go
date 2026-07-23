@@ -66,11 +66,20 @@ type ResourceKey struct {
 	// Executable path is retrieved from /proc/PID/exe
 	ExecutablePath libpf.String
 
-	// APMServiceName is provided by the eBPF programs
-	APMServiceName string
+	// ServiceName is the effective service name after applying all sources.
+	ServiceName string
+
+	// ServiceVersion and DeploymentEnvironment distinguish effective resources
+	// after thread-context attributes have been overlaid.
+	ServiceVersion        string
+	DeploymentEnvironment string
 
 	// ContextKey is the unique identifier for a service instance
 	ContextKey libpf.String
+
+	// ThreadResourceKey distinguishes per-thread overrides of the process
+	// resource within the same service instance.
+	ThreadResourceKey libpf.String
 
 	PID int64
 }

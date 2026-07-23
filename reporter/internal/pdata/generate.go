@@ -303,8 +303,8 @@ func setResourceAttributes(attrs pcommon.Map, resource samples.ResourceKey, envV
 	if res != nil {
 		res.Attributes().CopyTo(attrs)
 	}
-	if resource.APMServiceName != "" {
-		attrs.PutStr(string(semconv.ServiceNameKey), resource.APMServiceName)
+	if resource.ServiceName != "" {
+		attrs.PutStr(string(semconv.ServiceNameKey), resource.ServiceName)
 	}
 	if resource.ContainerID != libpf.NullString {
 		attrs.PutStr(string(semconv.ContainerIDKey), resource.ContainerID.String())

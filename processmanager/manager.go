@@ -347,8 +347,9 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	pid := bpfTrace.PID
 	kernelFramesLen := len(bpfTrace.KernelFrames)
 	trace := &libpf.Trace{
-		Frames:       make(libpf.Frames, kernelFramesLen, kernelFramesLen+int(bpfTrace.NumFrames)),
-		CustomLabels: bpfTrace.CustomLabels,
+		Frames:                        make(libpf.Frames, kernelFramesLen, kernelFramesLen+int(bpfTrace.NumFrames)),
+		CustomLabels:                  bpfTrace.CustomLabels,
+		CustomLabelsFromThreadContext: bpfTrace.CustomLabelsFromThreadContext,
 	}
 	copy(trace.Frames, bpfTrace.KernelFrames)
 

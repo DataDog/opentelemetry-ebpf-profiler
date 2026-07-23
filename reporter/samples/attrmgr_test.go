@@ -29,8 +29,8 @@ func TestAttrTableManager(t *testing.T) {
 		"empty": {
 			k: []ResourceKey{
 				{
-					APMServiceName: "",
-					PID:            0,
+					ServiceName: "",
+					PID:         0,
 				},
 			},
 			expectedIndices: [][]int32{{0}},
@@ -41,12 +41,12 @@ func TestAttrTableManager(t *testing.T) {
 		"duplicate": {
 			k: []ResourceKey{
 				{
-					APMServiceName: "APMServiceName1",
-					PID:            1234,
+					ServiceName: "APMServiceName1",
+					PID:         1234,
 				},
 				{
-					APMServiceName: "APMServiceName1",
-					PID:            1234,
+					ServiceName: "APMServiceName1",
+					PID:         1234,
 				},
 			},
 			expectedIndices: [][]int32{{0, 1}, {0, 1}},
@@ -58,12 +58,12 @@ func TestAttrTableManager(t *testing.T) {
 		"different": {
 			k: []ResourceKey{
 				{
-					APMServiceName: "APMServiceName1",
-					PID:            1234,
+					ServiceName: "APMServiceName1",
+					PID:         1234,
 				},
 				{
-					APMServiceName: "APMServiceName2",
-					PID:            6789,
+					ServiceName: "APMServiceName2",
+					PID:         6789,
 				},
 			},
 			expectedIndices: [][]int32{{0, 1}, {2, 3}},
@@ -84,7 +84,7 @@ func TestAttrTableManager(t *testing.T) {
 			indices := make([][]int32, 0)
 			for _, k := range tc.k {
 				inner := pcommon.NewInt32Slice()
-				mgr.AppendOptionalString(inner, semconv.ServiceNameKey, k.APMServiceName)
+				mgr.AppendOptionalString(inner, semconv.ServiceNameKey, k.ServiceName)
 				mgr.AppendInt(inner, semconv.ProcessPIDKey, k.PID)
 				indices = append(indices, inner.AsRaw())
 			}
