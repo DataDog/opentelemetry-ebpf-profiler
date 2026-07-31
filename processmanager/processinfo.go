@@ -227,8 +227,7 @@ func (pm *ProcessManager) handleNewInterpreter(pr process.Process, bias libpf.Ad
 
 // selectProcessRuntime picks the runtime to emit as process.runtime.* for a
 // process that may have multiple runtimes. It prefers the top-level runtime,
-// i.e. the one whose DSO is the process's own executable (identified by exeOID),
-// and falls back to the first interpreter reporting runtime info
+// i.e. the one whose DSO is the process's own executable (identified by exeOID).
 func selectProcessRuntime(interps map[util.OnDiskFileIdentifier]interpreter.Instance,
 	exeOID util.OnDiskFileIdentifier) (name, version string) {
 	if inst, ok := interps[exeOID]; ok {
@@ -236,12 +235,15 @@ func selectProcessRuntime(interps map[util.OnDiskFileIdentifier]interpreter.Inst
 			return n, v
 		}
 	}
+	// Pick the smallest (name, version) so a process with several non-exe runtimes
+	// always reports the same one
 	for _, inst := range interps {
-		if n, v, ok := inst.RuntimeInfo(); ok {
-			return n, v
+		if n, v, ok := inst.RuntimeInfo(); ok &&
+			(name == "" || n < name || (n == name && v < version)) {
+			name, version = n, v
 		}
 	}
-	return "", ""
+	return name, version
 }
 
 func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.RawMapping,
@@ -671,8 +673,9 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		m.Path = libpf.Intern(m.Path).String()
 
 		if mappingNeeded {
+			// Trim any " (deleted)" suffix from the exe path before comparing to the mapping path (already trimmed)
 			if exeOID == (util.OnDiskFileIdentifier{}) && exe != libpf.NullString &&
-				m.Path == exe.String() {
+				m.Path == strings.TrimSuffix(exe.String(), " (deleted)") {
 				exeOID = m.GetOnDiskFileIdentifier()
 			}
 
@@ -792,6 +795,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 
 	// Sort and publish the new mappings and meta
 	slices.SortFunc(mappings, compareMapping)
+	needRuntime := false
 	pm.mu.Lock()
 	info = pm.getPidInformation(pid, pr)
 	if info != nil {
@@ -800,6 +804,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 			info.meta = meta
 		}
 		info.meta.ProcessContextInfo = processContextInfo
+		needRuntime = info.meta.RuntimeName == ""
 	}
 	interpreters := pm.interpreters[pid]
 	pm.mu.Unlock()
@@ -818,12 +823,15 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	}
 
 	// Resolve the process runtime for OTLP process.runtime.* emission.
-	pm.mu.Lock()
-	if info, ok := pm.pidToProcessInfo[pid]; ok && info.meta.RuntimeName == "" {
-		info.meta.RuntimeName, info.meta.RuntimeVersion =
-			selectProcessRuntime(pm.interpreters[pid], exeOID)
+	if needRuntime {
+		if name, version := selectProcessRuntime(interpreters, exeOID); name != "" {
+			pm.mu.Lock()
+			if info, ok := pm.pidToProcessInfo[pid]; ok && info.meta.RuntimeName == "" {
+				info.meta.RuntimeName, info.meta.RuntimeVersion = name, version
+			}
+			pm.mu.Unlock()
+		}
 	}
-	pm.mu.Unlock()
 
 	if len(mpAdd) > 0 || len(mpRemove) > 0 || len(interpreters) > 0 {
 		log.Debugf("Added %v mappings, removed %v mappings for PID %v with %d interpreters",

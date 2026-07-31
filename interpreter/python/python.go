@@ -81,9 +81,7 @@ type pythonData struct {
 	version uint16
 
 	// fullVersion is the "major.minor" or "major.minor.patch" string reported by
-	// RuntimeInfo(). patch is only present when read from the Py_Version symbol
-	// (path-derived versions lack it). Used for stdlib source resolution only,
-	// never for offset selection. See doc/runtime-version-emission.md §5.1.
+	// RuntimeInfo(); patch may be absent. Not used for offset selection.
 	fullVersion string
 
 	autoTLSKey libpf.SymbolValue
