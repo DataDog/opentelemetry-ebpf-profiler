@@ -673,9 +673,8 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		m.Path = libpf.Intern(m.Path).String()
 
 		if mappingNeeded {
-			// Trim any " (deleted)" suffix from the exe path before comparing to the mapping path (already trimmed)
 			if exeOID == (util.OnDiskFileIdentifier{}) && exe != libpf.NullString &&
-				m.Path == strings.TrimSuffix(exe.String(), " (deleted)") {
+				m.Path == exe.String() {
 				exeOID = m.GetOnDiskFileIdentifier()
 			}
 

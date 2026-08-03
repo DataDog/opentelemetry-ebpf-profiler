@@ -110,7 +110,8 @@ type MetaConfig struct {
 type ProcessMeta struct {
 	// process name retrieved from /proc/PID/comm
 	Name libpf.String
-	// executable path retrieved from /proc/PID/exe
+	// executable path retrieved from /proc/PID/exe, with the
+	// " (deleted)" suffix removed
 	Executable libpf.String
 	// process env vars from /proc/PID/environ
 	EnvVariables map[libpf.String]libpf.String
@@ -141,7 +142,8 @@ type Process interface {
 	// GetProcessMeta returns process specific metadata.
 	GetProcessMeta(MetaConfig) ProcessMeta
 
-	// GetExe returns the executable path of the process.
+	// GetExe returns the executable path of the process, with the
+	// " (deleted)" suffix removed
 	GetExe() (libpf.String, error)
 
 	// IterateMappings parses process memory mappings and calls the

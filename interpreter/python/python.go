@@ -790,10 +790,8 @@ func loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	var patch uint8
 	patchKnown := false
 	if majorFromSym, minorFromSym, patchFromSym, versionErr := readPyVersionHex(ef); versionErr == nil {
-		if major == 0 {
-			major = uint16(majorFromSym)
-			minor = uint16(minorFromSym)
-		}
+		major = uint16(majorFromSym)
+		minor = uint16(minorFromSym)
 		patch = patchFromSym
 		patchKnown = true
 	} else if major == 0 {

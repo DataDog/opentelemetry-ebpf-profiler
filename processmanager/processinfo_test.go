@@ -259,7 +259,7 @@ func TestSelectProcessRuntime(t *testing.T) {
 				libOID:                     &runtimeInstance{name: "cpython", version: "3.11.4", ok: true},
 				{DeviceID: 1, InodeNum: 3}: &runtimeInstance{name: "ruby", version: "3.2.0", ok: true},
 			},
-			exeOID:      exeOID, // absent from interps, so the fallback runs
+			exeOID:      exeOID,    // absent from interps, so the fallback runs
 			wantName:    "cpython", // "cpython" < "ruby", independent of map order
 			wantVersion: "3.11.4",
 		},
@@ -592,7 +592,6 @@ func TestSynchronizeProcessResolvesTopLevelRuntime(t *testing.T) {
 	tests := map[string]struct {
 		interps     map[util.OnDiskFileIdentifier]interpreter.Instance
 		preMeta     process.ProcessMeta
-		exe         libpf.String
 		wantName    string
 		wantVersion string
 	}{
@@ -603,15 +602,6 @@ func TestSynchronizeProcessResolvesTopLevelRuntime(t *testing.T) {
 				exeOID: &runtimeInstance{name: "go", version: "1.23.4", ok: true},
 				libOID: &runtimeInstance{name: "cpython", version: "3.11.4", ok: true},
 			},
-			wantName:    "go",
-			wantVersion: "1.23.4",
-		},
-		"top-level exe resolves when the on-disk binary is deleted": {
-			interps: map[util.OnDiskFileIdentifier]interpreter.Instance{
-				exeOID: &runtimeInstance{name: "go", version: "1.23.4", ok: true},
-				libOID: &runtimeInstance{name: "cpython", version: "3.11.4", ok: true},
-			},
-			exe:         libpf.Intern(exePath + " (deleted)"),
 			wantName:    "go",
 			wantVersion: "1.23.4",
 		},
@@ -657,13 +647,9 @@ func TestSynchronizeProcessResolvesTopLevelRuntime(t *testing.T) {
 				exitEvents: make(map[libpf.PID]times.KTime),
 			}
 
-			exe := test.exe
-			if exe == libpf.NullString {
-				exe = libpf.Intern(exePath)
-			}
 			pm.SynchronizeProcess(&testProcess{
 				pid:      pid,
-				exe:      exe,
+				exe:      libpf.Intern(exePath),
 				mappings: raws,
 			})
 
