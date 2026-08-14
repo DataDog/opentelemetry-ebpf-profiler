@@ -1815,6 +1815,13 @@ func (d *v8Data) String() string {
 	return fmt.Sprintf("V8 %d.%d.%d", (ver>>24)&0xff, (ver>>16)&0xff, ver&0xffff)
 }
 
+func (i *v8Instance) RuntimeInfo() (string, string, bool) {
+	// The version read from the binary is V8's own, not the Node.js release that
+	// embeds it, so report the runtime as V8.
+	ver := i.d.version
+	return "v8", fmt.Sprintf("%d.%d.%d", (ver>>24)&0xff, (ver>>16)&0xff, ver&0xffff), true
+}
+
 // mapFramePointerOffset converts the frame pointer offset in bytes to eBPF used
 // word offset relative to the number of slots read
 func mapFramePointerOffset(relBytes uint8) uint8 {
