@@ -33,6 +33,7 @@ import (
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/procmeta"
 	"go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
+	"go.opentelemetry.io/ebpf-profiler/procmeta/runtimeinfo"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/times"
@@ -115,10 +116,11 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 			internalOnlyEnvVars[libpf.Intern(name)] = libpf.Void{}
 		}
 	}
-	// The built-in enricher is always on, and comes first so that a configured
-	// enricher can override what it contributed.
+	// The built-ins are always on. Process context comes after runtime info so what
+	// an application publishes about itself wins over what the profiler inferred, and
+	// configured enrichers run last so they can override both.
 	resourceEnrichers := append(
-		[]procmeta.ResourceEnricher{processcontext.NewEnricher()},
+		[]procmeta.ResourceEnricher{runtimeinfo.NewEnricher(), processcontext.NewEnricher()},
 		cfg.ResourceEnrichers...)
 	mappingFilters := newMappingFilters(resourceEnrichers)
 
