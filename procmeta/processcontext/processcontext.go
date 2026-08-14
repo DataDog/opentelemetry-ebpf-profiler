@@ -7,7 +7,7 @@
 // See [OTEP 4719].
 //
 // [OTEP 4719]: https://github.com/open-telemetry/opentelemetry-specification/blob/main/oteps/profiles/4719-process-ctx.md
-package processcontext // import "go.opentelemetry.io/ebpf-profiler/process/processcontext"
+package processcontext // import "go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 
 import (
 	"encoding/binary"

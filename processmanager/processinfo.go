@@ -33,7 +33,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/process/processcontext"
+	"go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"

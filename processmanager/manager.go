@@ -29,7 +29,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/process/processcontext"
+	"go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
