@@ -14,6 +14,7 @@ package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanag
 import (
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path"
@@ -23,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"golang.org/x/sys/unix"
 
@@ -32,8 +34,8 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
+	"go.opentelemetry.io/ebpf-profiler/procmeta"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
@@ -154,6 +156,10 @@ func (pm *ProcessManager) getOrCreateProcessInfo(pid libpf.PID,
 		internalEnvVars: internalEnvVars,
 		libcInfo:        nil,
 	}
+	if n := len(pm.resourceEnrichers); n > 0 {
+		info.contributions = make([]*pcommon.Resource, n)
+		info.enricherState = make([]any, n)
+	}
 	pm.pidToProcessInfo[pid] = info
 
 	return info
@@ -198,6 +204,64 @@ func (pm *ProcessManager) readProcessMeta(pr process.Process, reason process.Rea
 		meta.EnvVariables = nil
 	}
 	return meta, internalEnvVars
+}
+
+// enrichResources runs the registered resource enrichers for a process and
+// publishes the merge of their contributions. Enrichers that report no change
+// keep the contribution they returned previously, so a contribution derived from
+// data that has since become unreadable is not lost.
+//
+// Caller must not hold the pm.mu lock: enrichers run arbitrary code, and read
+// /proc and remote process memory.
+func (pm *ProcessManager) enrichResources(pr process.Process, info *processInfo,
+	interpreters map[util.OnDiskFileIdentifier]interpreter.Instance,
+	enricherMappings [][]process.RawMapping, newProcessOrExec bool,
+) {
+	if info == nil || len(pm.resourceEnrichers) == 0 {
+		return
+	}
+
+	// Snapshot what the enrichers get to see, along with the state slots they get
+	// to update, so that they can run without the lock held.
+	pm.mu.Lock()
+	if len(info.contributions) != len(pm.resourceEnrichers) {
+		info.contributions = make([]*pcommon.Resource, len(pm.resourceEnrichers))
+		info.enricherState = make([]any, len(pm.resourceEnrichers))
+	}
+	meta := info.meta
+	envVars := info.internalEnvVars
+	contributions := slices.Clone(info.contributions)
+	state := slices.Clone(info.enricherState)
+	pm.mu.Unlock()
+
+	req := procmeta.ResourceRequest{
+		Process:          pr,
+		ProcBase:         pr.ProcBase(),
+		Meta:             &meta,
+		NewProcessOrExec: newProcessOrExec,
+		EnvVars:          envVars,
+		Interpreters:     interpreters,
+	}
+
+	changed := false
+	for i, e := range pm.resourceEnrichers {
+		if enricherMappings != nil {
+			req.Mappings = enricherMappings[i]
+		}
+		req.State = &state[i]
+		if res, ok := e.EnrichResource(&req); ok {
+			contributions[i] = res
+			changed = true
+		}
+	}
+
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	copy(info.enricherState, state)
+	if changed {
+		copy(info.contributions, contributions)
+		info.resource = procmeta.MergeResources(contributions)
+	}
 }
 
 // assignInterpreter will update the interpreters maps with given interpreter.Instance.
@@ -656,7 +720,6 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	updateProcessMeta := exe != libpf.NullString && exe != info.meta.Executable
 
 	// Get existing info
-	oldProcessContextPublishedAtNs := info.processContext.PublishedAtNs
 	oldInternalEnvVars := info.internalEnvVars
 	oldMappings := info.mappings
 	newProcess := len(info.mappings) == 0
@@ -694,18 +757,26 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	pm.mappingStats.numProcAttempts.Add(1)
 	start := time.Now()
 
-	// Address of the OTel ProcessContext mapping, or 0 if absent. Reading the
-	// payload is deferred until after GetProcessMeta so env vars are available for the merge.
-	var contextMappingAddr uint64
+	// enricherMappings collects, per resource enricher, the mappings its
+	// WantMapping filter selected. Nil when no enricher wants any.
+	var enricherMappings [][]process.RawMapping
+	if len(pm.mappingFilters) > 0 {
+		enricherMappings = make([][]process.RawMapping, len(pm.resourceEnrichers))
+	}
 
 	// This callback processes each memory mapping, keeping only executable
 	// file-backed mappings and anonymous executable/DLL mappings needed by interpreters.
 	// All other mappings are skipped.
 	numParseErrors, err := pr.IterateMappings(func(m process.RawMapping) bool {
-		if processcontext.IsContextMapping(m.IsExecutable(), m.Path) {
-			contextMappingAddr = m.Vaddr
-			// The eBPF hook on prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME) will trigger a
-			// PID resynchronization when the process names its context mapping "OTEL_CTX".
+		if enricherMappings != nil {
+			for _, f := range pm.mappingFilters {
+				if f.want(&m) {
+					// Detach Path from the recycled scanner buffer before storing.
+					selected := m
+					selected.Path = libpf.Intern(selected.Path).String()
+					enricherMappings[f.enricher] = append(enricherMappings[f.enricher], selected)
+				}
+			}
 		}
 
 		interpreterMapping := isInterpreterMapping(&m)
@@ -837,10 +908,6 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		meta, internalEnvVars = pm.readProcessMeta(pr, process.ReasonExec)
 	}
 
-	newProcessContextInfo, publishProcessContextInfo := processcontext.Resolve(
-		contextMappingAddr, pid, pr.GetRemoteMemory(),
-		oldProcessContextPublishedAtNs, internalEnvVars, updateProcessMeta || newProcess)
-
 	// Sort and publish the new mappings and meta.
 	slices.SortFunc(mappings, compareMapping)
 
@@ -852,12 +919,14 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 			info.meta = meta
 			info.internalEnvVars = internalEnvVars
 		}
-		if publishProcessContextInfo {
-			info.processContext = newProcessContextInfo
-		}
 	}
 	interpreters := pm.interpreters[pid]
 	pm.mu.Unlock()
+
+	// Contribute resource attributes, now that the mappings and the interpreters
+	// attached during this synchronization are known.
+	pm.enrichResources(pr, info, interpreters, enricherMappings,
+		updateProcessMeta || newProcess)
 
 	// Synchronize all interpreters with updated mappings
 	for _, instance := range interpreters {
@@ -916,15 +985,15 @@ func (pm *ProcessManager) CleanupPIDs() {
 	}
 }
 
-// metaForPID returns a consistent snapshot of the process metadata and its
-// resolved OTel process context for the given PID.
-func (pm *ProcessManager) metaForPID(pid libpf.PID) (process.Meta, processcontext.Info) {
+// metaForPID returns a consistent snapshot of the process metadata and of the
+// resource contributed by the resource enrichers for the given PID.
+func (pm *ProcessManager) metaForPID(pid libpf.PID) (process.Meta, *pcommon.Resource) {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	if procInfo, ok := pm.pidToProcessInfo[pid]; ok {
-		return procInfo.meta, procInfo.processContext
+		return procInfo.meta, procInfo.resource
 	}
-	return process.Meta{}, processcontext.Info{}
+	return process.Meta{}, nil
 }
 
 // findMappingForTrace locates the mapping for a given host trace.
@@ -989,6 +1058,16 @@ func (pm *ProcessManager) ProcessedUntil(traceCaptureKTime times.KTime) {
 		}
 
 		log.Debugf("PID %v deleted", pid)
+		if info, ok := pm.pidToProcessInfo[pid]; ok {
+			for _, state := range info.enricherState {
+				if closer, ok := state.(io.Closer); ok {
+					if err2 := closer.Close(); err2 != nil {
+						err = errors.Join(err, fmt.Errorf(
+							"failed to close resource enricher state for PID %d: %v", pid, err2))
+					}
+				}
+			}
+		}
 		delete(pm.pidToProcessInfo, pid)
 
 		for _, instance := range pm.interpreters[pid] {

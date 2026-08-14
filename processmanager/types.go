@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	lru "github.com/elastic/go-freelru"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/kallsyms"
@@ -15,8 +16,8 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+	"go.opentelemetry.io/ebpf-profiler/procmeta"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -135,10 +136,21 @@ type ProcessManager struct {
 	reportEnvVars libpf.Set[string]
 
 	// internalEnvVars holds the interned names of the env vars captured for the
-	// profiler's own use, to derive process context resource attributes.
+	// profiler's own use, as declared by the resource enrichers. They are kept out
+	// of the reported process metadata unless the user also asked for them.
 	internalEnvVars []libpf.String
 
 	metaEnrichers []process.MetaEnricher
+
+	// resourceEnrichers contribute OTel resource attributes on every process
+	// synchronization. Their index is the index into processInfo.contributions
+	// and processInfo.enricherState.
+	resourceEnrichers []procmeta.ResourceEnricher
+
+	// mappingFilters holds the non-nil WantMapping filters of resourceEnrichers,
+	// in the same order, so the mapping pass can dispatch without re-reading each
+	// enricher's config. Empty when no enricher wants mappings.
+	mappingFilters []mappingFilter
 
 	// probeAttachers is the set of per-process probe attachers registered via
 	// RegisterProbeAttacher. Protected by mu.
@@ -176,17 +188,33 @@ func (m *Mapping) GetOnDiskFileIdentifier() util.OnDiskFileIdentifier {
 	}
 }
 
+// mappingFilter pairs a resource enricher's WantMapping predicate with the index
+// of the enricher that declared it.
+type mappingFilter struct {
+	enricher int
+	want     func(m *process.RawMapping) bool
+}
+
 // processInfo contains information about the executable mappings
 // and Thread Specific Data of a process.
 type processInfo struct {
 	// process metadata, updated on executable changes
 	meta process.Meta
-	// processContext is the resolved OTel process-context snapshot. It is
-	// published together with meta under ProcessManager.mu.
-	processContext processcontext.Info
-	// internalEnvVars contains the OTel environment values needed to
-	// rebuild processContext without exposing them through process metadata. It
-	// is immutable once published under ProcessManager.mu.
+	// resource is the merge of contributions, published together with meta under
+	// ProcessManager.mu. Nil when no enricher contributed anything. Immutable
+	// once published.
+	resource *pcommon.Resource
+	// contributions holds the latest resource contributed by each resource
+	// enricher, indexed by ProcessManager.resourceEnrichers. Entries are
+	// immutable once stored; the slice is published under ProcessManager.mu.
+	contributions []*pcommon.Resource
+	// enricherState holds the per-process state of each resource enricher,
+	// indexed by ProcessManager.resourceEnrichers. Closed on process exit if the
+	// stored value implements io.Closer.
+	enricherState []any
+	// internalEnvVars contains the environment values declared by the resource
+	// enrichers, kept here rather than exposed through process metadata. It is
+	// immutable once published under ProcessManager.mu.
 	internalEnvVars map[libpf.String]libpf.String
 	// executable mappings sorted by FileID and mapping start address
 	mappings []Mapping
