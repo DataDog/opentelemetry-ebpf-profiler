@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/process"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	"go.opentelemetry.io/ebpf-profiler/procmeta"
+	"go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
@@ -582,7 +583,7 @@ func TestSynchronizeProcessRunEnrichers(t *testing.T) {
 	// Process first seen: gather and enrich metadata.
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
 	require.Equal(1, enricherCalls)
-	meta, _, _ := pm.metaForPID(pid)
+	meta, _ := pm.metaForPID(pid)
 	require.Equal("foobar", meta.ExtraMeta[key])
 
 	// Unchanged executable: don't refetch metadata, don't enrich.
@@ -592,7 +593,7 @@ func TestSynchronizeProcessRunEnrichers(t *testing.T) {
 	// Executable changed: refetch metadata and enrich.
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobarbaz")})
 	require.Equal(2, enricherCalls)
-	meta, _, _ = pm.metaForPID(pid)
+	meta, _ = pm.metaForPID(pid)
 	require.Equal("foobarbaz", meta.ExtraMeta[key])
 }
 
@@ -654,6 +655,35 @@ func newTestProcessManager(metaEnrichers []process.MetaEnricher,
 	}
 }
 
+func TestSynchronizeProcessContextEnvironmentFallback(t *testing.T) {
+	envEnricher := process.MetaEnricherFunc(func(_ string, meta *process.Meta) {
+		meta.InternalEnvVariables = map[libpf.String]libpf.String{
+			libpf.Intern("OTEL_SERVICE_NAME"): meta.Executable,
+		}
+	})
+	pm := newTestProcessManager([]process.MetaEnricher{envEnricher},
+		[]procmeta.ResourceEnricher{processcontext.NewEnricher()})
+	const pid = libpf.PID(123)
+	for _, exe := range []string{"first", "first", "after-exec"} {
+		pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern(exe)})
+		meta, resource := pm.metaForPID(pid)
+		require.Equal(t, map[string]string{"service.name": exe}, resourceAttrs(resource))
+		require.Empty(t, meta.EnvVariables)
+	}
+
+	// Configured enrichers run after the built-in context enricher and may override it.
+	override := &testResourceEnricher{
+		enrich: func(_ *procmeta.ResourceRequest, _ int) (*pcommon.Resource, bool) {
+			return resourceWithAttr("service.name", "override"), true
+		},
+	}
+	pm = newTestProcessManager([]process.MetaEnricher{envEnricher},
+		[]procmeta.ResourceEnricher{processcontext.NewEnricher(), override})
+	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("first")})
+	_, resource := pm.metaForPID(pid)
+	require.Equal(t, map[string]string{"service.name": "override"}, resourceAttrs(resource))
+}
+
 // TestSynchronizeProcessRunsResourceEnrichers verifies that resource enrichers run
 // on every synchronization, unlike meta enrichers, so attributes resolving after
 // first observation are still picked up.
@@ -675,14 +705,14 @@ func TestSynchronizeProcessRunsResourceEnrichers(t *testing.T) {
 
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
 	require.Equal(1, enricher.calls)
-	_, _, resource := pm.metaForPID(pid)
+	_, resource := pm.metaForPID(pid)
 	require.Nil(resource)
 	require.Equal(pid, enricher.reqs[0].Process.PID())
 
 	// Same executable: the meta enrichers would not run, but this one does.
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
 	require.Equal(2, enricher.calls)
-	_, _, resource = pm.metaForPID(pid)
+	_, resource = pm.metaForPID(pid)
 	require.Equal(map[string]string{"late.attr": "resolved"}, resourceAttrs(resource))
 
 	// Reporting no change keeps the published contribution.
@@ -691,7 +721,7 @@ func TestSynchronizeProcessRunsResourceEnrichers(t *testing.T) {
 	}
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
 	require.Equal(3, enricher.calls)
-	_, _, resource = pm.metaForPID(pid)
+	_, resource = pm.metaForPID(pid)
 	require.Equal(map[string]string{"late.attr": "resolved"}, resourceAttrs(resource))
 
 	// Reporting a change with a nil resource withdraws it.
@@ -699,7 +729,7 @@ func TestSynchronizeProcessRunsResourceEnrichers(t *testing.T) {
 		return nil, true
 	}
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
-	_, _, resource = pm.metaForPID(pid)
+	_, resource = pm.metaForPID(pid)
 	require.Nil(resource)
 }
 
@@ -822,12 +852,12 @@ func TestSynchronizeProcessResourceEnricherExecDropsContributions(t *testing.T) 
 	pm := newTestProcessManager(nil, []procmeta.ResourceEnricher{enricher})
 
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("/usr/bin/python3")})
-	_, _, resource := pm.metaForPID(pid)
+	_, resource := pm.metaForPID(pid)
 	require.Equal(map[string]string{"process.runtime.name": "cpython"}, resourceAttrs(resource))
 
 	// Exec: the contribution and the state derived from the old program go.
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("/usr/bin/native")})
-	_, _, resource = pm.metaForPID(pid)
+	_, resource = pm.metaForPID(pid)
 	require.Nil(resource)
 	require.Nil(*enricher.reqs[1].State)
 }
@@ -849,18 +879,18 @@ func TestSynchronizeProcessExecDoesNotPairNewMetaWithOldResource(t *testing.T) {
 	enricher := &testResourceEnricher{}
 	pm := newTestProcessManager(nil, []procmeta.ResourceEnricher{enricher})
 	enricher.enrich = func(_ *procmeta.ResourceRequest, _ int) (*pcommon.Resource, bool) {
-		meta, _, resource := pm.metaForPID(pid)
+		meta, resource := pm.metaForPID(pid)
 		observed = append(observed, observation{meta.Executable.String(), resource})
 		// Identify the program, so a contribution carried across the exec shows up.
 		return resourceWithAttr("exe", meta.Executable.String()), true
 	}
 
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("/usr/bin/python3")})
-	_, _, resource := pm.metaForPID(pid)
+	_, resource := pm.metaForPID(pid)
 	require.Equal(map[string]string{"exe": "/usr/bin/python3"}, resourceAttrs(resource))
 
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("/usr/bin/native")})
-	_, _, resource = pm.metaForPID(pid)
+	_, resource = pm.metaForPID(pid)
 	require.Equal(map[string]string{"exe": "/usr/bin/native"}, resourceAttrs(resource))
 
 	require.Len(observed, 2)
@@ -900,12 +930,12 @@ func TestSynchronizeProcessMergesResourceContributions(t *testing.T) {
 	pm := newTestProcessManager(nil, []procmeta.ResourceEnricher{first, second})
 
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
-	_, _, resource := pm.metaForPID(pid)
+	_, resource := pm.metaForPID(pid)
 	require.Equal(map[string]string{"shared": "second", "only.first": "1"},
 		resourceAttrs(resource))
 
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
-	_, _, resource = pm.metaForPID(pid)
+	_, resource = pm.metaForPID(pid)
 	require.Equal(map[string]string{"shared": "second", "only.first": "1"},
 		resourceAttrs(resource))
 }
@@ -1021,7 +1051,7 @@ func TestSynchronizeProcessPublishesEnvVarBaseResource(t *testing.T) {
 		[]procmeta.ResourceEnricher{silent})
 
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
-	meta, _, resource := pm.metaForPID(pid)
+	meta, resource := pm.metaForPID(pid)
 	require.Equal(map[string]string{
 		"service.name":           "from-env",
 		"deployment.environment": "prod",
@@ -1039,7 +1069,7 @@ func TestSynchronizeProcessPublishesEnvVarBaseResource(t *testing.T) {
 		}})
 
 	pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern("foobar")})
-	_, _, resource = pm.metaForPID(pid)
+	_, resource = pm.metaForPID(pid)
 	require.Equal(map[string]string{
 		"service.name":           "from-context",
 		"deployment.environment": "prod",
@@ -1075,7 +1105,7 @@ func TestSynchronizeProcessEnvResourceWithoutEnrichers(t *testing.T) {
 	const pid = libpf.PID(123)
 	for _, exe := range []string{"first", "first", "after-exec"} {
 		pm.SynchronizeProcess(&testProcess{pid: pid, exe: libpf.Intern(exe)})
-		meta, _, resource := pm.metaForPID(pid)
+		meta, resource := pm.metaForPID(pid)
 		require.Equal(t, map[string]string{"service.name": exe}, resourceAttrs(resource))
 		require.Empty(t, meta.EnvVariables)
 	}

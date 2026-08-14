@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"go.opentelemetry.io/otel/metric/noop"
 
@@ -41,6 +41,7 @@ var expectedResourceAttrs = map[string]string{
 	"telemetry.sdk.name":          "example_ctx.c",
 	"resource.key1":               "resource.value1",
 	"resource.key2":               "resource.value2",
+	"env.only":                    "preserved",
 }
 
 type mockIntervals struct{}
@@ -149,9 +150,10 @@ func Test_ProcessContext(t *testing.T) {
 
 			cmd := exec.CommandContext(ctx, filepath.Join(exeDir, tc.exeName), tc.args...)
 			cmd.Stderr = os.Stderr
-			if len(tc.env) > 0 {
-				cmd.Env = append(os.Environ(), tc.env...)
-			}
+			cmd.Env = append(os.Environ(), tc.env...)
+			// Environment-only keys survive, while the context's service.name wins.
+			cmd.Env = append(cmd.Env, "OTEL_SERVICE_NAME=from-env",
+				"OTEL_RESOURCE_ATTRIBUTES=env.only=preserved")
 			require.NoError(t, cmd.Start())
 
 			wg := sync.WaitGroup{}
@@ -183,7 +185,7 @@ func Test_ProcessContext(t *testing.T) {
 					if meta.PID != libpf.PID(cmd.Process.Pid) {
 						continue
 					}
-					if !attributesMatch(meta.ResourceAttrs, expectedResourceAttrs) {
+					if !resourceMatches(meta.Resource, expectedResourceAttrs) {
 						continue
 					}
 					t.Logf("Got expected resource for PID %d", meta.PID)
@@ -199,12 +201,14 @@ func Test_ProcessContext(t *testing.T) {
 	}
 }
 
-// attributesMatch reports whether every key in want is present in attrs with
-// the expected string value. Extra keys in attrs are ignored.
-func attributesMatch(attrs attribute.Set, want map[string]string) bool {
+// resourceMatches reports whether every expected string attribute is present.
+func resourceMatches(resource *pcommon.Resource, want map[string]string) bool {
+	if resource == nil {
+		return false
+	}
 	for k, v := range want {
-		got, ok := attrs.Value(attribute.Key(k))
-		if !ok || got.Type() != attribute.STRING || got.AsString() != v {
+		got, ok := resource.Attributes().Get(k)
+		if !ok || got.Type() != pcommon.ValueTypeStr || got.Str() != v {
 			return false
 		}
 	}

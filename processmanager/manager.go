@@ -33,6 +33,7 @@ import (
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/procmeta"
+	"go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/times"
@@ -100,7 +101,11 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 		cfg.FrameCacheSize = DefaultFrameCacheSize
 	}
 
-	resourceEnrichers := slices.Clone(cfg.ResourceEnrichers)
+	// The built-in enricher is always on, and comes first so that a configured
+	// enricher can override what it contributed.
+	resourceEnrichers := append(
+		[]procmeta.ResourceEnricher{processcontext.NewEnricher()},
+		cfg.ResourceEnrichers...)
 	mappingFilters := newMappingFilters(resourceEnrichers)
 
 	elfInfoCache, err := lru.New[util.OnDiskFileIdentifier, elfInfo](ELFInfoCacheSize,
@@ -409,7 +414,7 @@ func hashFrameCacheKey(fk frameCacheKey) uint32 {
 // trace handling to a goroutine pool, the caching strategy needs to be updated
 // accordingly.
 func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *samples.TypeMetadata) *libpf.Trace {
-	procMeta, resourceAttrs, resource := pm.metaForPID(bpfTrace.PID)
+	procMeta, resource := pm.metaForPID(bpfTrace.PID)
 	meta := &samples.TraceEventMeta{
 		Timestamp:      libpf.UnixTime64(times.KTime(bpfTrace.KTime).UnixNano()),
 		Comm:           bpfTrace.Comm,
@@ -422,7 +427,6 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 		ProfileType:    profileType,
 		Value:          bpfTrace.Value,
 		EnvVars:        procMeta.EnvVariables,
-		ResourceAttrs:  resourceAttrs,
 		Resource:       resource,
 		TraceID:        bpfTrace.APMTraceID,
 		SpanID:         bpfTrace.APMTransactionID,

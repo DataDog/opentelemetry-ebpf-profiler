@@ -7,18 +7,15 @@
 // See [OTEP 4719].
 //
 // [OTEP 4719]: https://github.com/open-telemetry/opentelemetry-specification/blob/main/oteps/profiles/4719-process-ctx.md
-package processcontext // import "go.opentelemetry.io/ebpf-profiler/process/processcontext"
+package processcontext // import "go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 
 import (
 	"errors"
 	"fmt"
-	"net/url"
-	"strings"
 	"structs"
 	"unsafe"
 
 	"go.opentelemetry.io/otel/attribute"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	processcontextpb "go.opentelemetry.io/proto/otlp/processcontext/v1development"
 	"google.golang.org/protobuf/proto"
@@ -51,10 +48,6 @@ const (
 	maxPayloadSize   = 65536 // bytes
 
 	monotonicPublishedAtNsOffset = libpf.Address(unsafe.Offsetof(header{}.MonotonicPublishedAtNs))
-
-	// Env vars used to derive resource attributes.
-	resourceAttrKey = "OTEL_RESOURCE_ATTRIBUTES"
-	svcNameKey      = "OTEL_SERVICE_NAME"
 )
 
 var (
@@ -75,8 +68,8 @@ type Info struct {
 	ResourceAttrs attribute.Set
 	threadCtx     *threadContextInfo
 	publishedAtNs uint64
-	// valid is false only on a zero Info, meaning never resolved or
-	// invalidated by an exec. Resolve never returns an invalid Info.
+	// valid distinguishes a successfully read context, even an empty one,
+	// from a context that is absent or invalid.
 	valid bool
 }
 
@@ -175,51 +168,28 @@ func readOnce(mappingAddr libpf.Address, pid libpf.PID, rm remotememory.RemoteMe
 	}, nil
 }
 
-// Resolve reads the process context from a context mapping (if any). Per
-// [OTEP 4719], a successful read is already the SDK's resolved resource, so
-// it publishes as-is. OTEL_SERVICE_NAME/OTEL_RESOURCE_ATTRIBUTES are only a
-// fallback when no context is available.
-// Returns old when nothing new was read, so the result is always safe to store.
-//
-// mappingAddr=0 means the mapping was not observed this sync. Pass a zero old
-// to force a rebuild, which is what an exec requires so that new env vars take
-// effect even while a mapping is present.
+// Resolve reads only the process context contribution. It reports whether that
+// contribution changed; environment resources and precedence belong to the caller.
+// A zero mapping address withdraws an earlier contribution. A concurrent update
+// or an unchanged timestamp preserves the previous snapshot.
 func Resolve(
-	mappingAddr uint64, pid libpf.PID, rm remotememory.RemoteMemory,
-	old Info,
-	envVars map[libpf.String]libpf.String,
-) Info {
+	mappingAddr uint64, pid libpf.PID, rm remotememory.RemoteMemory, old Info,
+) (Info, bool) {
 	if mappingAddr == 0 {
-		// Old came from env vars alone: nothing changed.
-		if old.valid && old.publishedAtNs == 0 {
-			return old
-		}
-	} else {
-		// Workaround for a CodeQL warning about uint64 -> uintptr (libpf.Address) overflow.
-		addr := libpf.Address(mappingAddr & uint64(^libpf.Address(0)))
-
-		info, err := read(addr, pid, rm, old.publishedAtNs, 0)
-		switch {
-		case err == nil:
-			return info
-		case errors.Is(err, errNoUpdate):
-			return old
-		case errors.Is(err, errConcurrentUpdate):
-			// Retries are exhausted, so prefer the previous context over dropping it.
-			if old.valid {
-				return old
-			}
-		default:
-			log.Debugf("Failed to read ProcessContext for PID %d: %v", pid, err)
-		}
+		return Info{}, old.valid
 	}
-
-	// No context to read from at this point, so env vars are all there is.
-	env, err := attributesFromEnvVars(envVars)
-	if err != nil {
-		log.Debugf("Partial resource attributes: %v", err)
+	// Workaround for a CodeQL warning about uint64 -> uintptr (libpf.Address) overflow.
+	addr := libpf.Address(mappingAddr & uint64(^libpf.Address(0)))
+	info, err := read(addr, pid, rm, old.publishedAtNs, 0)
+	switch {
+	case err == nil:
+		return info, true
+	case errors.Is(err, errNoUpdate), errors.Is(err, errConcurrentUpdate):
+		return old, false
+	default:
+		log.Debugf("Failed to read ProcessContext for PID %d: %v", pid, err)
+		return Info{}, true
 	}
-	return Info{ResourceAttrs: env, valid: true}
 }
 
 func IsContextMapping(isExecutable bool, mappingPath string) bool {
@@ -332,71 +302,4 @@ func convertAnyValue(src *commonpb.AnyValue) (attribute.Value, bool) {
 		log.Debugf("convertAnyValue: unknown AnyValue variant %T, dropping", v)
 		return attribute.Value{}, false
 	}
-}
-
-// EnvVarSet returns the environment variables used to derive process context
-// resource attributes.
-func EnvVarSet() libpf.Set[string] {
-	return libpf.Set[string]{svcNameKey: {}, resourceAttrKey: {}}
-}
-
-// attributesFromEnvVars builds resource attributes from OTEL_SERVICE_NAME and
-// OTEL_RESOURCE_ATTRIBUTES, returning an empty set when neither contributes.
-// A non-nil error means the returned set is partial.
-func attributesFromEnvVars(envVars map[libpf.String]libpf.String) (attribute.Set, error) {
-	var attrs []attribute.KeyValue
-	var err error
-	if v, ok := envVars[libpf.Intern(resourceAttrKey)]; ok {
-		var pairs []attribute.KeyValue
-		pairs, err = parseResourceAttributes(v.String())
-		if err != nil {
-			err = fmt.Errorf("%s=%q: %w", resourceAttrKey, v.String(), err)
-		}
-		attrs = append(attrs, pairs...)
-	}
-	// Appended last so it wins newAttributeSet's last-value-wins dedup:
-	// OTEL_SERVICE_NAME overrides service.name from OTEL_RESOURCE_ATTRIBUTES.
-	if v, ok := envVars[libpf.Intern(svcNameKey)]; ok {
-		if name := strings.TrimSpace(v.String()); name != "" {
-			attrs = append(attrs, semconv.ServiceName(name))
-		}
-	}
-	return newAttributeSet(attrs), err
-}
-
-// parseResourceAttributes parses an OTEL_RESOURCE_ATTRIBUTES value as
-// comma-separated key=value pairs where keys and values are percent-encoded.
-// Returns the pairs in source order, duplicates included. newAttributeSet
-// resolves them last-value-wins.
-//
-// Malformed input yields the valid pairs plus a non-nil error. The spec says
-// SHOULD discard everything, but matching the Go SDK keeps the profiler and
-// the profiled application from reporting different resources.
-func parseResourceAttributes(raw string) ([]attribute.KeyValue, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	var pairs []attribute.KeyValue
-	var errs []error
-	for pair := range strings.SplitSeq(raw, ",") {
-		k, v, ok := strings.Cut(pair, "=")
-		if !ok {
-			errs = append(errs, fmt.Errorf("missing '=' in %q", pair))
-			continue
-		}
-		// Keep the raw text, as the Go SDK does.
-		key, err := url.PathUnescape(strings.TrimSpace(k))
-		if err != nil {
-			key = strings.TrimSpace(k)
-			errs = append(errs, fmt.Errorf("invalid key %q: %w", k, err))
-		}
-		value, err := url.PathUnescape(strings.TrimSpace(v))
-		if err != nil {
-			value = strings.TrimSpace(v)
-			errs = append(errs, fmt.Errorf("invalid value for key %q: %w", key, err))
-		}
-		pairs = append(pairs, attribute.String(key, value))
-	}
-	return pairs, errors.Join(errs...)
 }

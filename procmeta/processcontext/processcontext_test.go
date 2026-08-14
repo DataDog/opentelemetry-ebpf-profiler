@@ -586,265 +586,59 @@ func TestProcessContext_Read_ThreadContext(t *testing.T) {
 	})
 }
 
-func TestAttributesFromEnvVars(t *testing.T) {
-	tests := []struct {
-		name     string
-		envVars  map[libpf.String]libpf.String
-		expected map[string]string
-	}{
-		{
-			name: "no env vars",
-		},
-		{
-			name: "OTEL_SERVICE_NAME",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_SERVICE_NAME"): libpf.Intern("my-service"),
-			},
-			expected: map[string]string{
-				"service.name": "my-service",
-			},
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES simple",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("key1=value1,key2=value2"),
-			},
-			expected: map[string]string{
-				"key1": "value1",
-				"key2": "value2",
-			},
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES percent-encoded values",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("key1=val%2Cwith%2Ccomma,key2=value2"),
-			},
-			expected: map[string]string{
-				"key1": "val,with,comma",
-				"key2": "value2",
-			},
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES percent-encoded keys",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("key%3D2=value2,key%2C3=value3"),
-			},
-			expected: map[string]string{
-				"key=2": "value2",
-				"key,3": "value3",
-			},
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES undecodable value kept raw, siblings kept",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("good=value,bad=%ZZ"),
-			},
-			expected: map[string]string{"good": "value", "bad": "%ZZ"},
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES undecodable key kept raw, siblings kept",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("good=value,bad%ZZ=value2"),
-			},
-			expected: map[string]string{"good": "value", "bad%ZZ": "value2"},
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES missing equals skips pair, siblings kept",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("good=value,badpair"),
-			},
-			expected: map[string]string{"good": "value"},
-		},
-		{
-			name: "OTEL_SERVICE_NAME is trimmed",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_SERVICE_NAME"): libpf.Intern("  my-service  "),
-			},
-			expected: map[string]string{"service.name": "my-service"},
-		},
-		{
-			name: "OTEL_SERVICE_NAME whitespace only is dropped",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_SERVICE_NAME"): libpf.Intern("   "),
-			},
-			expected: nil,
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES surrounding whitespace is trimmed",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("  k=v  "),
-			},
-			expected: map[string]string{"k": "v"},
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES empty value",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern(""),
-			},
-			expected: nil,
-		},
-		{
-			name: "OTEL_RESOURCE_ATTRIBUTES empty key dropped, siblings kept",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("=orphan,good=value"),
-			},
-			expected: map[string]string{"good": "value"},
-		},
-		{
-			name: "both env vars",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_SERVICE_NAME"):        libpf.Intern("my-svc"),
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("deployment.environment=prod"),
-			},
-			expected: map[string]string{
-				"service.name":           "my-svc",
-				"deployment.environment": "prod",
-			},
-		},
-		{
-			name: "OTEL_SERVICE_NAME wins over service.name in OTEL_RESOURCE_ATTRIBUTES",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_SERVICE_NAME"):        libpf.Intern("from-service-name"),
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("service.name=from-attrs"),
-			},
-			expected: map[string]string{
-				"service.name": "from-service-name",
-			},
-		},
-		{
-			// Last-writer-wins is mandated by the OTel spec, not incidental.
-			name: "OTEL_RESOURCE_ATTRIBUTES duplicate keys: last writer wins",
-			envVars: map[libpf.String]libpf.String{
-				libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("k=first,k=second,k=third"),
-			},
-			expected: map[string]string{
-				"k": "third",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			attrs, _ := attributesFromEnvVars(tt.envVars)
-
-			if tt.expected == nil {
-				assert.Zero(t, attrs.Len())
-				return
-			}
-
-			require.NotZero(t, attrs.Len())
-			got := make(map[string]string)
-			for _, kv := range attrs.ToSlice() {
-				got[string(kv.Key)] = kv.Value.AsString()
-			}
-			assert.Equal(t, tt.expected, got)
-		})
-	}
-}
-
-// Resolve distinguishes a zero Info (never resolved, or invalidated by an exec)
-// from a resolved context that happens to carry nothing.
 func TestResolve(t *testing.T) {
-	envVars := map[libpf.String]libpf.String{
-		libpf.Intern("OTEL_SERVICE_NAME"): libpf.Intern("svc"),
-	}
-	// Callers store the result unconditionally, so an invalid Info would
-	// publish empty attributes.
-	resolve := func(t *testing.T, mappingAddr uint64, rm remotememory.RemoteMemory,
-		old Info, envVars map[libpf.String]libpf.String,
-	) Info {
-		t.Helper()
-		info := Resolve(mappingAddr, 1, rm, old, envVars)
-		require.True(t, info.valid)
-		return info
-	}
-	// A resolved context carrying nothing: no mapping, no env vars.
-	resolvedEmpty := resolve(t, 0, remotememory.RemoteMemory{}, Info{}, nil)
-	// A header stuck mid-update, so read exhausts its retries and reports a
-	// concurrent update.
+	resolvedEmpty := Info{publishedAtNs: 7, valid: true}
 	midUpdate := func() remotememory.RemoteMemory {
 		mock := newMockReader()
 		mock.writeAt(0x1000, createValidHeader(100, 0x2000, 0))
 		return remotememory.RemoteMemory{ReaderAt: mock}
 	}
 
-	t.Run("zero Info resolves with no mapping and no env vars", func(t *testing.T) {
-		info := resolve(t, 0, remotememory.RemoteMemory{}, Info{}, nil)
-		assert.Zero(t, info.publishedAtNs)
+	t.Run("no mapping has no contribution", func(t *testing.T) {
+		info, changed := Resolve(0, 1, remotememory.RemoteMemory{}, Info{})
+		assert.False(t, changed)
+		assert.Equal(t, Info{}, info)
 	})
-
-	t.Run("zero Info resolves from env vars", func(t *testing.T) {
-		info := resolve(t, 0, remotememory.RemoteMemory{}, Info{}, envVars)
-		assert.Equal(t, "svc", serviceName(t, info))
-	})
-
-	t.Run("resolved and empty is steady state", func(t *testing.T) {
-		info := resolve(t, 0, remotememory.RemoteMemory{}, resolvedEmpty, envVars)
-		assert.Equal(t, resolvedEmpty, info, "unchanged old must come back as-is")
-	})
-
-	t.Run("mapping disappeared clears its attributes", func(t *testing.T) {
+	t.Run("mapping disappeared withdraws its attributes", func(t *testing.T) {
 		old := Info{
 			ResourceAttrs: attribute.NewSet(attribute.String("from.mapping", "v")),
-			publishedAtNs: 7,
-			valid:         true,
+			publishedAtNs: 7, valid: true,
 		}
-		info := resolve(t, 0, remotememory.RemoteMemory{}, old, envVars)
-		_, found := info.ResourceAttrs.Value("from.mapping")
-		assert.False(t, found, "mapping attributes must not outlive the mapping")
-		assert.Equal(t, "svc", serviceName(t, info))
+		info, changed := Resolve(0, 1, remotememory.RemoteMemory{}, old)
+		assert.True(t, changed)
+		assert.Equal(t, Info{}, info)
 	})
-
-	t.Run("concurrent update preserves a resolved context", func(t *testing.T) {
-		info := resolve(t, 0x1000, midUpdate(), resolvedEmpty, envVars)
-		assert.Equal(t, resolvedEmpty, info, "unchanged old must come back as-is")
+	t.Run("concurrent update preserves an empty resolved context", func(t *testing.T) {
+		info, changed := Resolve(0x1000, 1, midUpdate(), resolvedEmpty)
+		assert.False(t, changed)
+		assert.Equal(t, resolvedEmpty, info)
 	})
-
-	t.Run("concurrent update on a zero Info falls back to env vars", func(t *testing.T) {
-		info := resolve(t, 0x1000, midUpdate(), Info{}, envVars)
-		assert.Equal(t, "svc", serviceName(t, info))
+	t.Run("initial concurrent update has no contribution", func(t *testing.T) {
+		info, changed := Resolve(0x1000, 1, midUpdate(), Info{})
+		assert.False(t, changed)
+		assert.Equal(t, Info{}, info)
 	})
-
-	t.Run("read failure falls back to env vars", func(t *testing.T) {
+	t.Run("read failure withdraws a stale contribution", func(t *testing.T) {
 		mock := newMockReader()
 		mock.setError(errors.New("read error"))
-		info := resolve(t, 0x1000,
-			remotememory.RemoteMemory{ReaderAt: mock}, Info{}, envVars)
-		assert.Equal(t, "svc", serviceName(t, info))
+		info, changed := Resolve(0x1000, 1,
+			remotememory.RemoteMemory{ReaderAt: mock}, resolvedEmpty)
+		assert.True(t, changed)
+		assert.Equal(t, Info{}, info)
 	})
-
-	t.Run("successfully read context is published as-is, env vars ignored", func(t *testing.T) {
+	t.Run("successful publication and unchanged timestamp", func(t *testing.T) {
 		payload, err := proto.Marshal(&testContext)
 		require.NoError(t, err)
-		const payloadAddr = 0x2000
 		mock := newMockReader()
-		mock.writeAt(0x1000, createValidHeader(uint32(len(payload)), payloadAddr, 7))
-		mock.writeAt(payloadAddr, payload)
+		mock.writeAt(0x1000, createValidHeader(uint32(len(payload)), 0x2000, 7))
+		mock.writeAt(0x2000, payload)
 		rm := remotememory.RemoteMemory{ReaderAt: mock}
-
-		envVarsWithExtra := map[libpf.String]libpf.String{
-			libpf.Intern("OTEL_SERVICE_NAME"):        libpf.Intern("svc"),
-			libpf.Intern("OTEL_RESOURCE_ATTRIBUTES"): libpf.Intern("deployment.environment=prod"),
-		}
-		info := resolve(t, 0x1000, rm, Info{}, envVarsWithExtra)
-		assert.Equal(t, "test-service", serviceName(t, info), "context resource.name must win")
-		_, found := info.ResourceAttrs.Value("deployment.environment")
-		assert.False(t, found, "env vars must not be merged into a successfully read context")
-	})
-
-	t.Run("unchanged timestamp is steady state", func(t *testing.T) {
-		payload, err := proto.Marshal(&testContext)
-		require.NoError(t, err)
-		const payloadAddr = 0x2000
-		mock := newMockReader()
-		mock.writeAt(0x1000, createValidHeader(uint32(len(payload)), payloadAddr, 7))
-		mock.writeAt(payloadAddr, payload)
-		rm := remotememory.RemoteMemory{ReaderAt: mock}
-
-		first := resolve(t, 0x1000, rm, Info{}, envVars)
-		require.Equal(t, uint64(7), first.publishedAtNs)
-
-		second := resolve(t, 0x1000, rm, first, envVars)
-		assert.Equal(t, first, second, "same timestamp must return old unchanged")
+		first, changed := Resolve(0x1000, 1, rm, Info{})
+		require.True(t, changed)
+		require.True(t, first.valid)
+		assert.Equal(t, "test-service", serviceName(t, first))
+		second, changed := Resolve(0x1000, 1, rm, first)
+		assert.False(t, changed)
+		assert.Equal(t, first, second)
 	})
 }

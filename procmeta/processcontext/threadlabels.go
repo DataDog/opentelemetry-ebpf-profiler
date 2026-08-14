@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package processcontext // import "go.opentelemetry.io/ebpf-profiler/process/processcontext"
+package processcontext // import "go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
 
 import (
 	"errors"

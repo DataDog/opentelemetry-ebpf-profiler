@@ -17,7 +17,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/process/processcontext"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/procmeta"
@@ -192,9 +191,6 @@ type mappingFilter struct {
 type processInfo struct {
 	// process metadata, updated on executable changes
 	meta process.Meta
-	// processContext is the resolved OTel process-context snapshot.
-	// Published under ProcessManager.mu.
-	processContext processcontext.Info
 	// resource is the merge of envResource and contributions, published under
 	// ProcessManager.mu and immutable once it is. Nil until something contributes.
 	resource *pcommon.Resource

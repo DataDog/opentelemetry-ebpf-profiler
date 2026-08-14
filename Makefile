@@ -54,7 +54,7 @@ all: otelcol-ebpf-profiler
 clean:
 	@go clean -cache -i
 	@$(MAKE) -s -C support/ebpf clean
-	@$(MAKE) -C process/processcontext/integrationtests/testdata clean
+	@$(MAKE) -C procmeta/processcontext/integrationtests/testdata clean
 	@$(MAKE) -C tls/testdata clean
 	@chmod -Rf u+w go/ || true
 	@rm -rf go .cache support/*.test interpreter/go/integrationtests/pprof_1_*
@@ -150,7 +150,7 @@ test-deps: $(GOLABELS_TESTDATA_TARGETS)
 TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf kallsyms support interpreter/go/integrationtests
 
 processctx-execs:
-	$(MAKE) -C process/processcontext/integrationtests/testdata
+	$(MAKE) -C procmeta/processcontext/integrationtests/testdata
 
 tlsvar-execs:
 	$(MAKE) -C tls/testdata
@@ -158,7 +158,7 @@ tlsvar-execs:
 # Host-only: the qemu initramfs cannot load shared libraries, which the
 # lib/dlopen testdata variants will need.
 host-integration-tests: processctx-execs tlsvar-execs
-	go test -exec sudo -v -tags host_integration ./process/processcontext/integrationtests/
+	go test -exec sudo -v -tags host_integration ./procmeta/processcontext/integrationtests/
 	go test -v -tags host_integration ./tls/
 
 pprof-execs: pprof_1_23 pprof_1_24 pprof_1_24_cgo pprof_1_24_cgo_pie pprof_stable pprof_stable_buildinfo_cgo pprof_stable_cgo pprof_stable_cgo_pie
