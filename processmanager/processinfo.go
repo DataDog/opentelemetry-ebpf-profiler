@@ -134,7 +134,7 @@ func (pm *ProcessManager) getOrCreateProcessInfo(pid libpf.PID,
 
 	// Gather metadata without holding the processmanager lock:
 	// This reads /proc and may invoke arbitrary enricher callbacks.
-	meta, internalEnvVars := pm.readProcessMeta(pr)
+	meta, internalEnvVars := pm.readProcessMeta(pr, process.ReasonFirstSeen)
 
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -159,14 +159,28 @@ func (pm *ProcessManager) getOrCreateProcessInfo(pid libpf.PID,
 	return info
 }
 
-// readProcessMeta gathers the process metadata and separates the environment
-// variables captured for the profiler's own use from those the user asked to
-// report. The former are copied into a dedicated map, while reportEnvVars
-// determines which captured values remain in the returned Meta.
-func (pm *ProcessManager) readProcessMeta(pr process.Process) (
+// readProcessMeta gathers the process metadata, runs the registered meta
+// enrichers over it, and separates the environment variables captured for the
+// profiler's own use from those the user asked to report. The former are copied
+// into a dedicated map, while reportEnvVars determines which captured values
+// remain in the returned Meta.
+//
+// Caller must not hold the pm.mu lock: this reads /proc and invokes arbitrary
+// enricher callbacks.
+func (pm *ProcessManager) readProcessMeta(pr process.Process, reason process.Reason) (
 	process.Meta, map[libpf.String]libpf.String,
 ) {
-	meta := pr.GetProcessMeta(pm.metaEnrichers)
+	meta := pr.GetProcessMeta()
+
+	req := process.MetaRequest{
+		Process:  pr,
+		ProcBase: pr.ProcBase(),
+		Reason:   reason,
+	}
+	for _, e := range pm.metaEnrichers {
+		e.EnrichMeta(&req, &meta)
+	}
+
 	var internalEnvVars map[libpf.String]libpf.String
 	for _, key := range pm.internalEnvVars {
 		if value, ok := meta.EnvVariables[key]; ok {
@@ -820,7 +834,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	var meta process.Meta
 	internalEnvVars := oldInternalEnvVars
 	if updateProcessMeta {
-		meta, internalEnvVars = pm.readProcessMeta(pr)
+		meta, internalEnvVars = pm.readProcessMeta(pr, process.ReasonExec)
 	}
 
 	newProcessContextInfo, publishProcessContextInfo := processcontext.Resolve(

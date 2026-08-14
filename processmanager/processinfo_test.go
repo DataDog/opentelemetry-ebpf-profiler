@@ -158,12 +158,12 @@ func (tp *testProcess) GetMachineData() process.MachineData {
 	return process.MachineData{}
 }
 
-func (tp *testProcess) GetProcessMeta(enrichers []process.MetaEnricher) process.Meta {
-	meta := process.Meta{Executable: tp.exe}
-	for _, e := range enrichers {
-		e.EnrichMeta(fmt.Sprintf("/proc/%d", tp.pid), &meta)
-	}
-	return meta
+func (tp *testProcess) GetProcessMeta() process.Meta {
+	return process.Meta{Executable: tp.exe}
+}
+
+func (tp *testProcess) ProcBase() string {
+	return fmt.Sprintf("/proc/%d/", tp.pid)
 }
 
 func (tp *testProcess) GetExe() (libpf.String, error) {
@@ -558,9 +558,12 @@ func TestSynchronizeProcessRunEnrichers(t *testing.T) {
 	pid := libpf.PID(123)
 	key := libpf.Intern("test.key")
 	enricherCalls := 0
-	enricher := process.MetaEnricherFunc(func(procBase string, meta *process.Meta) {
+	reasons := []process.Reason{}
+	enricher := process.MetaEnricherFunc(func(req *process.MetaRequest, meta *process.Meta) {
 		enricherCalls++
-		require.Equal(fmt.Sprintf("/proc/%d", pid), procBase)
+		reasons = append(reasons, req.Reason)
+		require.Equal(fmt.Sprintf("/proc/%d/", pid), req.ProcBase)
+		require.Equal(pid, req.Process.PID())
 		meta.ExtraMeta = map[libpf.String]string{key: meta.Executable.String()}
 	})
 
@@ -587,4 +590,6 @@ func TestSynchronizeProcessRunEnrichers(t *testing.T) {
 	require.Equal(2, enricherCalls)
 	meta, _ = pm.metaForPID(pid)
 	require.Equal("foobarbaz", meta.ExtraMeta[key])
+
+	require.Equal([]process.Reason{process.ReasonFirstSeen, process.ReasonExec}, reasons)
 }

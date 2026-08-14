@@ -112,7 +112,11 @@ func (sp *systemProcess) GetExe() (libpf.String, error) {
 	return libpf.Intern(str), nil
 }
 
-func (sp *systemProcess) GetProcessMeta(enrichers []MetaEnricher) Meta {
+func (sp *systemProcess) ProcBase() string {
+	return sp.procBase
+}
+
+func (sp *systemProcess) GetProcessMeta() Meta {
 	exePath, _ := sp.GetExe()
 
 	containerID, err := extractContainerID(sp.pid)
@@ -120,16 +124,10 @@ func (sp *systemProcess) GetProcessMeta(enrichers []MetaEnricher) Meta {
 		log.Debugf("Failed extracting containerID for %d: %v", sp.pid, err)
 	}
 
-	pMeta := Meta{
+	return Meta{
 		Executable:  exePath,
 		ContainerID: containerID,
 	}
-
-	for _, e := range enrichers {
-		e.EnrichMeta(sp.procBase, &pMeta)
-	}
-
-	return pMeta
 }
 
 // parseContainerID parses cgroup v1 and v2 container IDs
@@ -185,9 +183,9 @@ func cgroupRootInode(procBase string) (uint64, error) {
 // NewEnvVarsEnricher returns a MetaEnricher that captures a filtered subset of the
 // process's environment variables into Meta.EnvVariables.
 func NewEnvVarsEnricher(includeEnvVars libpf.Set[string]) MetaEnricher {
-	return MetaEnricherFunc(func(procBase string, meta *Meta) {
+	return MetaEnricherFunc(func(req *MetaRequest, meta *Meta) {
 		var envVarMap map[libpf.String]libpf.String
-		if envVars, err := os.ReadFile(procBase + "environ"); err == nil {
+		if envVars, err := os.ReadFile(req.ProcBase + "environ"); err == nil {
 			envVarMap = make(map[libpf.String]libpf.String, len(includeEnvVars))
 			// environ has environment variables separated by a null byte (hex: 00)
 			for envVar := range strings.SplitSeq(pfunsafe.ToString(envVars), "\000") {
@@ -214,18 +212,19 @@ func NewSelfContainerIDEnricher() (MetaEnricher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return MetaEnricherFunc(func(procBase string, meta *Meta) {
+	return MetaEnricherFunc(func(req *MetaRequest, meta *Meta) {
 		if meta.ContainerID != libpf.NullString || selfContainerID == libpf.NullString {
 			return
 		}
-		ino, err := cgroupRootInode(procBase)
+		ino, err := cgroupRootInode(req.ProcBase)
 		if err != nil {
 			return
 		}
 		if ino == selfCgroupIno {
 			meta.ContainerID = selfContainerID
 		} else {
-			log.Debugf("Process %s cgroup inode (%d) doesn't match profiler (%d)", procBase, ino, selfCgroupIno)
+			log.Debugf("Process %s cgroup inode (%d) doesn't match profiler (%d)",
+				req.ProcBase, ino, selfCgroupIno)
 		}
 	}), nil
 }

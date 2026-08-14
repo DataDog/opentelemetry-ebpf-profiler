@@ -127,7 +127,11 @@ type Process interface {
 	GetMachineData() MachineData
 
 	// GetProcessMeta returns process specific metadata.
-	GetProcessMeta([]MetaEnricher) Meta
+	GetProcessMeta() Meta
+
+	// ProcBase returns the process's /proc/<pid>/ base path (including trailing
+	// slash), or an empty string if the process has no procfs entry.
+	ProcBase() string
 
 	// GetExe returns the executable path of the process.
 	GetExe() (libpf.String, error)
@@ -161,20 +165,49 @@ type Process interface {
 	pfelf.ELFOpener
 }
 
-// MetaEnricher is called once per process when it is first observed.
+// Reason describes why a process's metadata is being collected.
+type Reason uint8
+
+const (
+	// ReasonFirstSeen means the process was observed for the first time.
+	ReasonFirstSeen Reason = iota
+	// ReasonExec means the process's executable changed.
+	ReasonExec
+)
+
+// MetaRequest describes the process whose metadata is being collected.
+type MetaRequest struct {
+	// Process gives access to the target process: remote memory, mappings and
+	// the executable.
+	Process Process
+	// ProcBase is the process's /proc/<pid>/ base path (including trailing
+	// slash). It is empty for processes that have no procfs entry, such as
+	// coredumps.
+	ProcBase string
+	// Reason is why the metadata is being collected.
+	Reason Reason
+}
+
+// MetaEnricher is called when a process's metadata is collected: once when the
+// process is first observed, and again whenever its executable changes.
 // Implementations may read from /proc or any other source and store arbitrary
-// key-value pairs in meta.ExtraMeta. The call happens while the process is still
-// alive, so short-lived process data is reliably captured.
+// key-value pairs in meta.ExtraMeta. The Meta is freshly built and owned by the
+// caller, so implementations may write to it freely. The call happens while the
+// process is still alive, so short-lived process data is reliably captured.
+//
+// Enrichers that need to contribute OTel resource attributes, or that need data
+// which only becomes available after the process has been observed, should
+// implement procmeta.ResourceEnricher instead.
 type MetaEnricher interface {
-	// EnrichMeta is called with the process's /proc/<pid>/ base path (including
-	// trailing slash) and a pointer to the Meta to populate.
-	EnrichMeta(string, *Meta)
+	// EnrichMeta is called with a request describing the process and a pointer
+	// to the Meta to populate.
+	EnrichMeta(req *MetaRequest, meta *Meta)
 }
 
 // MetaEnricherFunc is an adapter to allow use of plain functions as a
 // MetaEnricher.
-type MetaEnricherFunc func(string, *Meta)
+type MetaEnricherFunc func(*MetaRequest, *Meta)
 
-func (f MetaEnricherFunc) EnrichMeta(procBase string, meta *Meta) {
-	f(procBase, meta)
+func (f MetaEnricherFunc) EnrichMeta(req *MetaRequest, meta *Meta) {
+	f(req, meta)
 }

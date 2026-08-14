@@ -203,8 +203,13 @@ func (cd *CoredumpProcess) GetMachineData() MachineData {
 	return cd.machineData
 }
 
-func (cd *CoredumpProcess) GetProcessMeta(_ []MetaEnricher) Meta {
+func (cd *CoredumpProcess) GetProcessMeta() Meta {
 	return Meta{}
+}
+
+// ProcBase implements the Process interface. A coredump has no procfs entry.
+func (cd *CoredumpProcess) ProcBase() string {
+	return ""
 }
 
 func (cd *CoredumpProcess) GetExe() (libpf.String, error) {

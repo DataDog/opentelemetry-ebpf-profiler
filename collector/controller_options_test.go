@@ -42,23 +42,24 @@ func TestWithProcessMetaEnricher(t *testing.T) {
 	procBase := t.TempDir() + "/"
 	require.NoError(t, os.WriteFile(filepath.Join(procBase, "loginuid"), []byte("1000\n"), 0600))
 
-	loginUIDEnricher := process.MetaEnricherFunc(func(procBase string, meta *process.Meta) {
-		data, err := os.ReadFile(filepath.Join(procBase, "loginuid"))
-		if err != nil {
-			return
-		}
-		if meta.ExtraMeta == nil {
-			meta.ExtraMeta = make(map[libpf.String]string)
-		}
-		meta.ExtraMeta[libpf.Intern("process.loginuid")] = strings.TrimSpace(string(data))
-	})
+	loginUIDEnricher := process.MetaEnricherFunc(
+		func(req *process.MetaRequest, meta *process.Meta) {
+			data, err := os.ReadFile(filepath.Join(req.ProcBase, "loginuid"))
+			if err != nil {
+				return
+			}
+			if meta.ExtraMeta == nil {
+				meta.ExtraMeta = make(map[libpf.String]string)
+			}
+			meta.ExtraMeta[libpf.Intern("process.loginuid")] = strings.TrimSpace(string(data))
+		})
 
 	opt := WithProcessMetaEnricher(loginUIDEnricher)
 	result := opt.apply(&controllerOption{})
 	require.Len(t, result.processMetaEnrichers, 1)
 
 	meta := &process.Meta{}
-	result.processMetaEnrichers[0].EnrichMeta(procBase, meta)
+	result.processMetaEnrichers[0].EnrichMeta(&process.MetaRequest{ProcBase: procBase}, meta)
 	require.Equal(t, "1000", meta.ExtraMeta[libpf.Intern("process.loginuid")])
 }
 
