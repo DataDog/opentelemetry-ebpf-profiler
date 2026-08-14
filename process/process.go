@@ -109,7 +109,10 @@ func (sp *systemProcess) GetExe() (libpf.String, error) {
 	if err != nil {
 		return libpf.NullString, err
 	}
-	return libpf.Intern(str), nil
+	// Drop the kernel's deleted marker, as trimMappingPath does for mapping paths,
+	// so that the executable stays comparable with the paths in /proc/<pid>/maps
+	// after the binary has been replaced or removed.
+	return libpf.Intern(strings.TrimSuffix(str, deletedSuffix)), nil
 }
 
 func (sp *systemProcess) ProcBase() string {
@@ -275,10 +278,13 @@ func detectSelfContainerIDViaInode() (libpf.String, uint64, error) {
 	return matched, selfIno, nil
 }
 
+// deletedSuffix is what the kernel appends to the path of a file that has been
+// unlinked while still mapped or open.
+// See path_with_deleted in linux/fs/d_path.c
+const deletedSuffix = " (deleted)"
+
 func trimMappingPath(path string) string {
-	// Trim the deleted indication from the path.
-	// See path_with_deleted in linux/fs/d_path.c
-	path = strings.TrimSuffix(path, " (deleted)")
+	path = strings.TrimSuffix(path, deletedSuffix)
 	if path == "/dev/zero" {
 		// Some JIT engines map JIT area from /dev/zero
 		// make it anonymous.

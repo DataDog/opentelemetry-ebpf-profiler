@@ -133,7 +133,8 @@ type Process interface {
 	// slash), or an empty string if the process has no procfs entry.
 	ProcBase() string
 
-	// GetExe returns the executable path of the process.
+	// GetExe returns the executable path of the process, with the kernel's
+	// " (deleted)" suffix removed.
 	GetExe() (libpf.String, error)
 
 	// IterateMappings parses process memory mappings and calls the

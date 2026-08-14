@@ -215,7 +215,8 @@ func (pm *ProcessManager) readProcessMeta(pr process.Process, reason process.Rea
 // /proc and remote process memory.
 func (pm *ProcessManager) enrichResources(pr process.Process, info *processInfo,
 	interpreters map[util.OnDiskFileIdentifier]interpreter.Instance,
-	enricherMappings [][]process.RawMapping, newProcessOrExec bool,
+	enricherMappings [][]process.RawMapping, exeOID util.OnDiskFileIdentifier,
+	newProcessOrExec bool,
 ) {
 	if info == nil || len(pm.resourceEnrichers) == 0 {
 		return
@@ -241,6 +242,7 @@ func (pm *ProcessManager) enrichResources(pr process.Process, info *processInfo,
 		NewProcessOrExec: newProcessOrExec,
 		EnvVars:          envVars,
 		Interpreters:     interpreters,
+		MainExecutableID: exeOID,
 	}
 
 	changed := false
@@ -764,6 +766,10 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		enricherMappings = make([][]process.RawMapping, len(pm.resourceEnrichers))
 	}
 
+	// exeOID identifies the DSO that is the process's own executable, letting
+	// resource enrichers tell it apart from the shared libraries it loaded.
+	var exeOID util.OnDiskFileIdentifier
+
 	// This callback processes each memory mapping, keeping only executable
 	// file-backed mappings and anonymous executable/DLL mappings needed by interpreters.
 	// All other mappings are skipped.
@@ -794,6 +800,11 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		m.Path = libpf.Intern(m.Path).String()
 
 		if mappingNeeded {
+			if exeOID == (util.OnDiskFileIdentifier{}) && exe != libpf.NullString &&
+				m.Path == exe.String() {
+				exeOID = m.GetOnDiskFileIdentifier()
+			}
+
 			var fm libpf.FrameMapping
 			if oldm, ok := mpRemove[m.Vaddr]; ok {
 				if oldm.Length == m.Length && oldm.Device == m.Device && oldm.Inode == m.Inode {
@@ -925,7 +936,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 
 	// Contribute resource attributes, now that the mappings and the interpreters
 	// attached during this synchronization are known.
-	pm.enrichResources(pr, info, interpreters, enricherMappings,
+	pm.enrichResources(pr, info, interpreters, enricherMappings, exeOID,
 		updateProcessMeta || newProcess)
 
 	// Synchronize all interpreters with updated mappings
