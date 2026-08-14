@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
 	"go.opentelemetry.io/ebpf-profiler/procmeta"
 	"go.opentelemetry.io/ebpf-profiler/procmeta/processcontext"
+	"go.opentelemetry.io/ebpf-profiler/procmeta/runtimeinfo"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
@@ -105,10 +106,12 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 			}
 		}
 	}
-	// Process context is always collected; user enrichers run last so they can
-	// override what the built-in ones contributed.
-	resourceEnrichers := make([]procmeta.ResourceEnricher, 0, len(cfg.ResourceEnrichers)+1)
-	resourceEnrichers = append(resourceEnrichers, processcontext.NewEnricher())
+	// The built-in enrichers are always on. Process context comes after runtime
+	// info so that what an application publishes about itself wins over what the
+	// profiler inferred, and user enrichers run last so they can override both.
+	resourceEnrichers := make([]procmeta.ResourceEnricher, 0, len(cfg.ResourceEnrichers)+2)
+	resourceEnrichers = append(resourceEnrichers,
+		runtimeinfo.NewEnricher(), processcontext.NewEnricher())
 	resourceEnrichers = append(resourceEnrichers, cfg.ResourceEnrichers...)
 
 	// Resolve each resource enricher's requirements once, so that neither the
