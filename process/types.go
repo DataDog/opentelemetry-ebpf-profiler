@@ -12,7 +12,6 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"go.opentelemetry.io/ebpf-profiler/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
@@ -115,8 +114,6 @@ type Meta struct {
 	EnvVariables map[libpf.String]libpf.String
 	// container ID retrieved from /proc/PID/cgroup
 	ContainerID libpf.String
-	// process context
-	ProcessContextInfo processcontext.Info
 
 	// ExtraMeta holds arbitrary key-value pairs populated by a MetaEnricher.
 	// It is nil unless an enricher is configured and explicitly sets values.
@@ -139,8 +136,14 @@ type Process interface {
 	// GetProcessMeta returns process specific metadata.
 	GetProcessMeta([]MetaEnricher) Meta
 
-	// GetExe returns the executable path of the process.
+	// GetExe returns the executable path of the process, with the kernel's
+	// " (deleted)" suffix removed.
 	GetExe() (libpf.String, error)
+
+	// GetExecutableFileIdentifier returns the on-disk identity of the process's own
+	// executable, comparable with any mapping's, so callers can tell it apart from
+	// the libraries it loaded.
+	GetExecutableFileIdentifier() (util.OnDiskFileIdentifier, error)
 
 	// IterateMappings parses process memory mappings and calls the
 	// callback for each mapping. The RawMapping's Path field may reference
