@@ -195,8 +195,8 @@ type processInfo struct {
 	// processContext is the resolved OTel process-context snapshot.
 	// Published under ProcessManager.mu.
 	processContext processcontext.Info
-	// resource is the merge of the contributions, published under ProcessManager.mu
-	// and immutable once it is. Nil until something contributes.
+	// resource is the merge of envResource and contributions, published under
+	// ProcessManager.mu and immutable once it is. Nil until something contributes.
 	resource *pcommon.Resource
 	// contributions holds each enricher's latest contribution, indexed by
 	// ProcessManager.resourceEnrichers. Entries are immutable once stored.
@@ -204,6 +204,9 @@ type processInfo struct {
 	// enricherState holds each enricher's per-process state, indexed the same way.
 	// Dropped, with no teardown call, when the process exits.
 	enricherState []any
+	// envResource holds the environment's base attributes, with enricher
+	// contributions merged on top. Built with the metadata, immutable thereafter.
+	envResource *pcommon.Resource
 	// executable mappings sorted by FileID and mapping start address
 	mappings []Mapping
 	// C-library Thread Specific Data information

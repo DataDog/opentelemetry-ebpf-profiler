@@ -30,7 +30,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
 	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/process/processcontext"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/procmeta"
@@ -135,9 +134,13 @@ func New(ctx context.Context, cfg Config) (*ProcessManager, error) {
 	}
 
 	metaEnrichers := make([]process.MetaEnricher, 0, len(cfg.ProcessMetaEnrichers)+2)
+	internalEnvVars := make(libpf.Set[string])
+	for _, name := range procmeta.EnvVarNames() {
+		internalEnvVars[name] = libpf.Void{}
+	}
 	// Cloned: the enricher closure outlives New, and the caller owns cfg.
 	metaEnrichers = append(metaEnrichers, process.NewEnvVarsEnricher(
-		maps.Clone(cfg.IncludeEnvVars), processcontext.EnvVarSet()))
+		maps.Clone(cfg.IncludeEnvVars), internalEnvVars))
 
 	selfContainerEnricher, err := process.NewSelfContainerIDEnricher()
 	if err != nil {

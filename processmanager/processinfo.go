@@ -141,7 +141,7 @@ func (pm *ProcessManager) getOrCreateProcessInfo(pid libpf.PID,
 
 	// Gather metadata without holding the processmanager lock:
 	// This reads /proc and may invoke arbitrary enricher callbacks.
-	meta := pr.GetProcessMeta(pm.metaEnrichers)
+	meta, envResource := pm.readProcessMeta(pr)
 
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
@@ -157,8 +157,9 @@ func (pm *ProcessManager) getOrCreateProcessInfo(pid libpf.PID,
 
 	pm.pidPageToMappingInfoSize++
 	info = &processInfo{
-		meta:     meta,
-		libcInfo: nil,
+		meta:        meta,
+		envResource: envResource,
+		libcInfo:    nil,
 		// Sole allocation site of the slots, so they are always as long as the
 		// registered enrichers, which index them.
 		contributions: make([]*pcommon.Resource, len(pm.resourceEnrichers)),
@@ -167,6 +168,14 @@ func (pm *ProcessManager) getOrCreateProcessInfo(pid libpf.PID,
 	pm.pidToProcessInfo[pid] = info
 
 	return info, true
+}
+
+// readProcessMeta gathers metadata and the base resource declared by the process's
+// environment. InternalEnvVariables is kept separate from user-requested reporting.
+// Caller must not hold pm.mu: this reads /proc and invokes arbitrary callbacks.
+func (pm *ProcessManager) readProcessMeta(pr process.Process) (process.Meta, *pcommon.Resource) {
+	meta := pr.GetProcessMeta(pm.metaEnrichers)
+	return meta, procmeta.ResourceFromEnvVars(meta.InternalEnvVariables)
 }
 
 // enrichResources runs the resource enrichers for a process and publishes the merge
@@ -179,7 +188,7 @@ func (pm *ProcessManager) enrichResources(pr process.Process, info *processInfo,
 	interpreters map[util.OnDiskFileIdentifier]interpreter.Instance,
 	enricherMappings [][]process.RawMapping, newProcessOrExec bool,
 ) {
-	if info == nil || len(pm.resourceEnrichers) == 0 {
+	if info == nil {
 		return
 	}
 
@@ -200,8 +209,8 @@ func (pm *ProcessManager) enrichResources(pr process.Process, info *processInfo,
 		Interpreters: interpreters,
 	}
 
-	// A new or execed process starts from cleared state, so the merge is due even if
-	// no enricher reports a change.
+	// A new or execed process has a base resource built this round and never
+	// published, so the merge is due even if no enricher reports a change.
 	changed := newProcessOrExec
 	for i, e := range pm.resourceEnrichers {
 		if enricherMappings != nil {
@@ -217,7 +226,7 @@ func (pm *ProcessManager) enrichResources(pr process.Process, info *processInfo,
 		return
 	}
 
-	merged := procmeta.MergeResources(nil, info.contributions)
+	merged := procmeta.MergeResources(info.envResource, info.contributions)
 
 	pm.mu.Lock()
 	info.resource = merged
@@ -896,8 +905,9 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 
 	// Update metadata of the process.
 	var meta process.Meta
+	var envResource *pcommon.Resource
 	if updateProcessMeta {
-		meta = pr.GetProcessMeta(pm.metaEnrichers)
+		meta, envResource = pm.readProcessMeta(pr)
 		internalEnvVars = meta.InternalEnvVariables
 	}
 
@@ -915,6 +925,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		info.mappings = mappings
 		if updateProcessMeta {
 			info.meta = meta
+			info.envResource = envResource
 			// Reset resource to nil to avoid pairing the replaced program's samples with
 			// the old one.
 			info.resource = nil
