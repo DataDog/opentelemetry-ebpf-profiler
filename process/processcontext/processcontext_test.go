@@ -209,7 +209,6 @@ func TestProcessContext_Read(t *testing.T) {
 			},
 			expectedResult: Info{
 				ResourceAttrs: expectedResourceAttrs(),
-				attributes:    expectedAttributes(),
 				publishedAtNs: 123456789,
 			},
 		},
@@ -318,7 +317,7 @@ func TestProcessContext_Read(t *testing.T) {
 				require.Equal(t, tt.expectedResult, ctx)
 			} else {
 				assert.Zero(t, ctx.ResourceAttrs.Len())
-				assert.Zero(t, ctx.attributes.Len())
+				assert.Nil(t, ctx.LabelDecoder())
 				assert.Zero(t, ctx.publishedAtNs)
 				require.Error(t, err)
 				assert.ErrorIs(t, err, tt.expectedErr)
@@ -424,7 +423,6 @@ func TestProcessContext_Read_RealProcessContext(t *testing.T) {
 			require.Equal(t,
 				Info{
 					ResourceAttrs: expectedResourceAttrs(),
-					attributes:    expectedAttributes(),
 					publishedAtNs: 123456789,
 				},
 				result)
@@ -745,10 +743,6 @@ func TestResolve(t *testing.T) {
 		second := resolve(t, 0x1000, rm, first, envVars)
 		assert.Equal(t, first, second, "same timestamp must return old unchanged")
 	})
-}
-
-func expectedAttributes() attribute.Set {
-	return attribute.NewSet(attribute.String("custom.attribute", "custom-value"))
 }
 
 func TestReadThreadContextInfo(t *testing.T) {

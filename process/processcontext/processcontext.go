@@ -92,8 +92,6 @@ var _ libpf.LabelDecoder = (*threadContextInfo)(nil)
 // construction.
 type Info struct {
 	ResourceAttrs attribute.Set
-	// Populated but unused until thread context lands.
-	attributes    attribute.Set
 	threadCtx     *threadContextInfo
 	publishedAtNs uint64
 	// resolved is false only on a zero Info, meaning never resolved or
@@ -280,7 +278,6 @@ func readPayload(rm remotememory.RemoteMemory, hdr header) (Info, error) {
 
 	return Info{
 		ResourceAttrs: newAttributeSet(convertKeyValues(ctx.GetResource().GetAttributes())),
-		attributes:    newAttributeSet(convertKeyValues(ctx.GetAttributes())),
 		threadCtx:     threadCtx,
 		publishedAtNs: hdr.MonotonicPublishedAtNs,
 	}, nil
