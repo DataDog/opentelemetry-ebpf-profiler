@@ -225,19 +225,49 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 		if err != nil {
 			return nil, err
 		}
-
-		ti, err := readTLSIndex(rm, arg)
-		if err != nil {
-			return nil, err
-		}
-		if ti != nil {
-			return attachDynamic(pid, ti.moduleID, ti.offset+d.offset)
-		}
-		return d.attachStatic(ebpf, pid, arg+d.offset)
+		return d.attachTLSDesc(ebpf, pid, rm, arg)
 
 	default:
 		return nil, fmt.Errorf("unknown TLS access model %v", d.access)
 	}
+}
+
+// attachTLSDesc resolves a relocated TLS descriptor whose argument is either a
+// TP-relative offset (static TLS) or a pointer to a tls_index (dynamic TLS).
+func (d data) attachTLSDesc(ebpf interpreter.EbpfHandler, pid libpf.PID,
+	rm remotememory.RemoteMemory, arg uint64,
+) (interpreter.Instance, error) {
+	if d.machine == elf.EM_X86_64 {
+		// Variant II places the static TLS block below TP, so a static offset
+		// is always negative and a tls_index pointer never is. Exact, unlike
+		// the dereference the variant I path below has to fall back on.
+		if int64(arg) < 0 {
+			return d.attachStatic(ebpf, pid, arg+d.offset)
+		}
+		ti, err := readTLSIndex(rm, arg)
+		if err != nil {
+			return nil, err
+		}
+		if ti == nil {
+			// A non-negative argument can only be a tls_index here, so failing
+			// to read one is a fault rather than a static offset.
+			return nil, fmt.Errorf("TLSDESC argument %#x is neither a negative "+
+				"TP offset nor a readable tls_index", arg)
+		}
+		return attachDynamic(pid, ti.moduleID, ti.offset+d.offset)
+	}
+
+	// Variant I places the block above TP, so both forms are positive and only
+	// a dereference separates them. An unreadable argument is the expected
+	// outcome for a static offset, hence the fallback rather than an error.
+	ti, err := readTLSIndex(rm, arg)
+	if err != nil {
+		return nil, err
+	}
+	if ti != nil {
+		return attachDynamic(pid, ti.moduleID, ti.offset+d.offset)
+	}
+	return d.attachStatic(ebpf, pid, arg+d.offset)
 }
 
 // s32FromUint64 narrows v to an int32, rejecting values that don't fit.
