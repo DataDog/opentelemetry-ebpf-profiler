@@ -188,6 +188,11 @@ func getStaticTLSOffset(ef *pfelf.File, sym *libpf.Symbol) (uint64, error) {
 	case elf.EM_X86_64:
 		// Variant II: the executable's TLS block sits immediately below TP, its
 		// size rounded up to the block alignment.
+		//
+		// Assumes PT_TLS's p_vaddr is p_align-aligned, which linkers normally
+		// emit. When it is not, glibc shifts by
+		// firstbyte = (-p_vaddr) & (align-1) and musl does not, and the mapping
+		// libc is unknown here, so matching one would break the other.
 		return uint64(sym.Address) - roundUp(uint64(tlsProg.Memsz), align), nil
 	}
 	return 0, fmt.Errorf("unsupported machine: %s", ef.Machine)
