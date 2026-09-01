@@ -273,7 +273,11 @@ func readPayload(rm remotememory.RemoteMemory, hdr header) (Info, error) {
 
 	threadCtx, err := readThreadContextInfo(ctx.GetAttributes())
 	if err != nil && !errors.Is(err, errThreadContextInfoNotFound) {
-		log.Debugf("failed to read thread context: %v", err)
+		// A genuine fault (unsupported schema version, or a malformed
+		// publisher), not the common "no schema published" case above.
+		// Every native label from this process is silently dropped until
+		// this is fixed, so it belongs above Debug.
+		log.Warnf("failed to read thread context: %v", err)
 	}
 
 	return Info{
