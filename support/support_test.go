@@ -33,11 +33,17 @@ func TestSizeOfCGoStruct(t *testing.T) {
 	}
 }
 
-// TestCustomLabelsUnionAlignment guards the unsafe.Pointer reinterpret of
-// Trace.Custom_labels_data as CustomLabelsArray (tracer/tracer.go): the field
-// must be aligned for CustomLabelsArray, or the cast reads misaligned data.
-func TestCustomLabelsUnionAlignment(t *testing.T) {
+// TestCustomLabelsUnionLayout guards the unsafe.Pointer reinterpret of
+// Trace.Custom_labels_data as CustomLabelsArray (tracer/tracer.go). The C side
+// asserts the same size equality, but only when types.h is compiled, so keep a
+// Go-side check that runs in make test.
+func TestCustomLabelsUnionLayout(t *testing.T) {
 	require.Zero(t,
 		unsafe.Offsetof(Trace{}.Custom_labels_data)%unsafe.Alignof(CustomLabelsArray{}),
 		"Trace.Custom_labels_data is not aligned for CustomLabelsArray")
+	// The cast reads a whole CustomLabelsArray out of the field, so it must not
+	// be the smaller of the two.
+	require.Equal(t,
+		unsafe.Sizeof(CustomLabelsData{}), unsafe.Sizeof(CustomLabelsArray{}),
+		"CustomLabelsData and CustomLabelsArray must be the same size")
 }
