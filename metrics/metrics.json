@@ -2258,5 +2258,12 @@
     "name": "UnwindThreadContextReadSuccesses",
     "field": "bpf.threadctx.read_successes",
     "id": 309
+  },
+  {
+    "description": "Number of native thread-context samples dropped because no label schema decoder was available for the process",
+    "type": "counter",
+    "name": "ThreadContextLabelsDroppedNoDecoder",
+    "field": "agent.threadctx.dropped.no_decoder",
+    "id": 310
   }
 ]

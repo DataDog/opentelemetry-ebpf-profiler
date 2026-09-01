@@ -716,6 +716,9 @@ const (
 	// Number of successful reads of thread context info
 	IDUnwindThreadContextReadSuccesses = 309
 
+	// Number of native thread-context samples dropped because no label schema decoder was available for the process
+	IDThreadContextLabelsDroppedNoDecoder = 310
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 310
+	IDMax = 311
 )
