@@ -7,9 +7,12 @@ package threadcontext // import "go.opentelemetry.io/ebpf-profiler/interpreter/t
 import (
 	"debug/elf"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libc"
@@ -64,13 +67,23 @@ type tlsIndex struct {
 // an offset larger than a non-PIE process's heap addresses, and that heap is
 // exactly where the loader allocates the tls_index. So dereference it instead:
 // a pointer yields a small module index, an offset points at nothing mapped.
+//
+// Only a failure to read the address is evidence about what it holds, so a
+// failure to reach the process at all is reported instead of being classified.
 func readTLSIndex(rm remotememory.RemoteMemory, addr uint64) (*tlsIndex, error) {
 	if addr < minUserAddr {
 		return nil, nil
 	}
 	moduleID, err := readUint64(rm, libpf.Address(addr))
-	if err != nil || moduleID == 0 || moduleID > maxTLSModuleID {
-		// Unreadable or implausible: not a pointer, so a large static offset.
+	if err != nil {
+		if processInaccessible(err) {
+			return nil, err
+		}
+		// Unreadable: not a pointer, so a large static offset.
+		return nil, nil
+	}
+	if moduleID == 0 || moduleID > maxTLSModuleID {
+		// Implausible module index: likewise a static offset.
 		return nil, nil
 	}
 	offset, err := readUint64(rm, libpf.Address(addr+8))
@@ -78,6 +91,14 @@ func readTLSIndex(rm remotememory.RemoteMemory, addr uint64) (*tlsIndex, error) 
 		return nil, err
 	}
 	return &tlsIndex{moduleID: moduleID, offset: offset}, nil
+}
+
+// processInaccessible reports whether err means the target process could not be
+// reached, as opposed to the address being unmapped. Anything else, including an
+// unrecognized error from a non-ptrace RemoteMemory, stays a classification
+// signal so the probe keeps working.
+func processInaccessible(err error) bool {
+	return errors.Is(err, unix.ESRCH) || errors.Is(err, unix.EPERM)
 }
 
 func findSymbol(ef *pfelf.File, symname string) *libpf.Symbol {
