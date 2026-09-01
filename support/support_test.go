@@ -22,6 +22,8 @@ func TestSizeOfCGoStruct(t *testing.T) {
 			want: sizeof_PHPProcInfo},
 		{name: "RubyProcInfo", input: unsafe.Sizeof(RubyProcInfo{}),
 			want: sizeof_RubyProcInfo},
+		{name: "ThreadContextProcInfo", input: unsafe.Sizeof(ThreadContextProcInfo{}),
+			want: sizeof_ThreadContextProcInfo},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -29,4 +31,13 @@ func TestSizeOfCGoStruct(t *testing.T) {
 				"unsafe.Sizeof(%v{}) = %v, want %v", tt.name, tt.input, tt.want)
 		})
 	}
+}
+
+// TestCustomLabelsUnionAlignment guards the unsafe.Pointer reinterpret of
+// Trace.Custom_labels_data as CustomLabelsArray (tracer/tracer.go): the field
+// must be aligned for CustomLabelsArray, or the cast reads misaligned data.
+func TestCustomLabelsUnionAlignment(t *testing.T) {
+	require.Zero(t,
+		unsafe.Offsetof(Trace{}.Custom_labels_data)%unsafe.Alignof(CustomLabelsArray{}),
+		"Trace.Custom_labels_data is not aligned for CustomLabelsArray")
 }
