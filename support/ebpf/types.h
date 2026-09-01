@@ -367,10 +367,10 @@ enum {
   // number of failures to get TSD base for thread context
   metricID_UnwindThreadContextErrReadTsdBase,
 
-  // number of failures read the thread context buffer
+  // number of failures to read the thread context buffer
   metricID_UnwindThreadContextErrReadThreadCtxBuf,
 
-  // number of failures read the thread context attributes
+  // number of failures to read the thread context attributes
   metricID_UnwindThreadContextErrReadThreadCtxAttrs,
 
   // number of successful reads of thread context info
