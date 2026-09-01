@@ -17,10 +17,13 @@ import (
 type tlsAccess uint8
 
 const (
+	// accessInvalid is the zero value, so a zero data is not mistaken for a
+	// descriptor at ELF address 0.
+	accessInvalid tlsAccess = iota
 	// accessTLSDesc: a TLS descriptor (GNU2/desc dialect) whose resolved argument
 	// is either a static TP-relative offset or a pointer to a tls_index struct
 	// for dynamic TLS. Covers general-dynamic and local-dynamic.
-	accessTLSDesc tlsAccess = iota
+	accessTLSDesc
 	// accessLocalExec: the variable lives in the static TLS block and its
 	// TP-relative offset is known at load time.
 	accessLocalExec
@@ -38,6 +41,8 @@ const (
 
 func (a tlsAccess) String() string {
 	switch a {
+	case accessInvalid:
+		return "invalid"
 	case accessTLSDesc:
 		return "tlsdesc"
 	case accessLocalExec:

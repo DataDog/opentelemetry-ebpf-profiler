@@ -184,7 +184,8 @@ type data struct {
 var _ interpreter.Data = &data{}
 
 func (d data) String() string {
-	return "Native thread labels"
+	return fmt.Sprintf("Native thread labels (%v elfAddr=0x%x offset=0x%x)",
+		d.access, d.elfAddr, d.offset)
 }
 
 func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
