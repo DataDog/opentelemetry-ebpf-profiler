@@ -31,9 +31,9 @@ const (
 	// loader, but whose in-module offset is the symbol's static value
 	// (GNU dialect, local-dynamic).
 	accessLocalDynamic
-	// accessGlobalDynamic: a GOT tls_index {module_id, offset} pair (GNU dialect,
-	// general-dynamic), both words filled in by the dynamic loader.
-	accessGlobalDynamic
+	// accessGeneralDynamic: a GOT tls_index {module_id, offset} pair (GNU
+	// dialect), both words filled in by the dynamic loader.
+	accessGeneralDynamic
 )
 
 func (a tlsAccess) String() string {
@@ -46,8 +46,8 @@ func (a tlsAccess) String() string {
 		return "initial-exec"
 	case accessLocalDynamic:
 		return "local-dynamic"
-	case accessGlobalDynamic:
-		return "global-dynamic"
+	case accessGeneralDynamic:
+		return "general-dynamic"
 	default:
 		return fmt.Sprintf("unknown(%d)", uint8(a))
 	}
@@ -110,7 +110,7 @@ func resolveTLSAccess(ef *pfelf.File, sym *libpf.Symbol) (*data, error) {
 		return &data{access: accessTLSDesc, elfAddr: tlsdescAddr, machine: ef.Machine}, nil
 	case tpmodAddr != 0:
 		// General-dynamic, GNU dialect.
-		return &data{access: accessGlobalDynamic, elfAddr: tpmodAddr, machine: ef.Machine}, nil
+		return &data{access: accessGeneralDynamic, elfAddr: tpmodAddr, machine: ef.Machine}, nil
 	case tpoffAddr != 0:
 		// Initial-exec.
 		return &data{access: accessInitialExec, elfAddr: tpoffAddr, machine: ef.Machine}, nil
@@ -130,8 +130,8 @@ func resolveTLSAccess(ef *pfelf.File, sym *libpf.Symbol) (*data, error) {
 
 	// No relocation references the symbol directly.
 	if ef.IsExecutable() {
-		// Local-exec: the variable lives in the main executable's static TLS
-		// block and its TP-relative offset is known at load time.
+		// Only the main executable gets a static TLS block, so an unreferenced
+		// symbol here is local-exec.
 		tlsOffset, err := getStaticTLSOffset(ef, sym)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get static TLS offset: %v", err)
