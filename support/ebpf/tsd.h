@@ -32,48 +32,44 @@ err:
   return -1;
 }
 
-// tls_read reads a TLS variable, either directly from static TLS or by
+// dtv_read reads a TLS variable belonging to a dynamically loaded module, by
 // traversing the Dynamic Thread Vector (DTV).
 //
-// For static TLS (module_id == 0) the variable is read directly at
-// tsd_base + tls_offset.
+// The DTV is an array of pointers to per-module TLS blocks, indexed by TLS
+// module ID. On x86_64 the default TLS dialect uses General Dynamic (GD)
+// relocations (R_X86_64_DTPMOD64) rather than TLSDESC, so the DTV path is the
+// primary mechanism for resolving thread-local variables in shared libraries.
+// This path is also needed on other platforms when TLSDESC is unavailable.
 //
-// For dynamic TLS (module_id != 0) the DTV is an array of pointers to per-module
-// TLS blocks, indexed by TLS module ID. On x86_64 the default TLS dialect uses
-// General Dynamic (GD) relocations (R_X86_64_DTPMOD64) rather than TLSDESC, so
-// the DTV path is the primary mechanism for resolving thread-local variables in
-// shared libraries. This path is also needed on other platforms when TLSDESC is
-// unavailable.
+// Static TLS is not handled here: its offset is TP-relative and signed, a
+// different coordinate system from the unsigned in-module offset below, so
+// callers read it directly at tsd_base + offset.
 //
 // Parameters:
 //   dtvi:       DTVInfo extracted from __tls_get_addr disassembly (offset, multiplier)
 //   tsd_base:   thread pointer base (from tsd_get_base)
-//   module_id:  TLS module ID for the target DSO (from DTPMOD64 relocation), or 0 for static TLS
-//   tls_offset: TP-relative offset (static), or offset within the module's TLS block (dynamic)
+//   module_id:  TLS module ID for the target DSO (from DTPMOD64 relocation), non-zero
+//   tls_offset: offset of the variable within the module's TLS block
 //   out:        pointer to store the result
 static inline EBPF_INLINE int
-tls_read(const DTVInfo *dtvi, const void *tsd_base, u32 module_id, u64 tls_offset, void **out)
+dtv_read(const DTVInfo *dtvi, const void *tsd_base, u32 module_id, u64 tls_offset, void **out)
 {
-  // For static TLS the block is the static TLS area at the thread pointer; for
-  // dynamic TLS it is the module's block, located via the DTV.
-  const void *tls_block = tsd_base;
-  if (module_id != 0) {
-    // DTV access is always indirect: TP+offset yields a pointer to the DTV array,
-    // which must be dereferenced before indexing by module ID.
-    const void *dtv_ptr;
-    if (bpf_probe_read_user(&dtv_ptr, sizeof(dtv_ptr), tsd_base + dtvi->offset)) {
-      goto err;
-    }
+  // DTV access is always indirect: TP+offset yields a pointer to the DTV array,
+  // which must be dereferenced before indexing by module ID.
+  const void *dtv_ptr;
+  if (bpf_probe_read_user(&dtv_ptr, sizeof(dtv_ptr), tsd_base + dtvi->offset)) {
+    goto err;
+  }
 
-    // Index into the DTV to find this module's TLS block base address.
-    // DTV layout: [header, module1_block, module2_block, ...]
-    // dtv[0] is glibc's generation counter, musl's module count. Indexing from
-    // 1 is correct either way.
-    // Entry size varies: 8 bytes (musl) or 16 bytes (glibc).
-    u64 dtv_entry_offset = (u64)module_id * dtvi->multiplier;
-    if (bpf_probe_read_user(&tls_block, sizeof(tls_block), (void *)(dtv_ptr + dtv_entry_offset))) {
-      goto err;
-    }
+  // Index into the DTV to find this module's TLS block base address.
+  // DTV layout: [header, module1_block, module2_block, ...]
+  // dtv[0] is glibc's generation counter, musl's module count. Indexing from
+  // 1 is correct either way.
+  // Entry size varies: 8 bytes (musl) or 16 bytes (glibc).
+  const void *tls_block;
+  u64 dtv_entry_offset = (u64)module_id * dtvi->multiplier;
+  if (bpf_probe_read_user(&tls_block, sizeof(tls_block), (void *)(dtv_ptr + dtv_entry_offset))) {
+    goto err;
   }
 
   // Read the actual TLS variable at tls_block + tls_offset.
@@ -81,7 +77,7 @@ tls_read(const DTVInfo *dtvi, const void *tsd_base, u32 module_id, u64 tls_offse
     goto err;
   }
 
-  DEBUG_PRINT("readTLS module %d, tls_offset 0x%llx", module_id, (unsigned long long)tls_offset);
+  DEBUG_PRINT("dtv_read module %d, tls_offset 0x%llx", module_id, (unsigned long long)tls_offset);
   return 0;
 
 err:
