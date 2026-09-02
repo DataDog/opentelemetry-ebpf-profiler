@@ -56,9 +56,7 @@ dtv_read(const DTVInfo *dtvi, const void *tsd_base, u32 module_id, u64 tls_offse
   }
 
   // Index into the DTV to find this module's TLS block base address.
-  // DTV layout: [header, module1_block, module2_block, ...]
-  // dtv[0] is glibc's generation counter, musl's module count. Indexing from
-  // 1 is correct either way.
+  // DTV layout: [generation, module1_block, module2_block, ...]
   // Entry size varies: 8 bytes (musl) or 16 bytes (glibc).
   void *tls_block;
   u64 dtv_entry_offset = (u64)module_id * dtvi->multiplier;
