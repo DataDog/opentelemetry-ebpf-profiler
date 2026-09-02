@@ -27,3 +27,19 @@ func DecodeBiasAndUnwindProgram(biasAndUnwindProgram uint64) (bias uint64, unwin
 	unwindProgram = uint8(biasAndUnwindProgram >> 56)
 	return bias, unwindProgram
 }
+
+// NewStaticTLSVarInfo builds a TLSVarInfo for a variable in static TLS,
+// located at a TP-relative offset with no DTV indirection (module_id == 0).
+//
+// Static TLS offsets are computed as a uint64 underflow (a small negative
+// number stored via wraparound): int32(int64(v)) recovers the right value for
+// realistic magnitudes but would silently wrap on anything larger, so a value
+// that doesn't fit is rejected rather than trusted.
+func NewStaticTLSVarInfo(tlsOffset uint64) (TLSVarInfo, error) {
+	s := int64(tlsOffset)
+	offset := int32(s)
+	if s != int64(offset) {
+		return TLSVarInfo{}, fmt.Errorf("TLS offset %#x does not fit in s32", tlsOffset)
+	}
+	return TLSVarInfo{Tls_offset: offset}, nil
+}

@@ -350,17 +350,15 @@ func s32FromUint64(v uint64) (int32, error) {
 func attachStatic(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	tlsOffset uint64,
 ) (interpreter.Instance, error) {
-	offset, err := s32FromUint64(tlsOffset)
+	// module_id == 0 marks static TLS: no DTV indirection at unwind time.
+	tlsVar, err := support.NewStaticTLSVarInfo(tlsOffset)
 	if err != nil {
 		return nil, fmt.Errorf("TLS offset: %w", err)
 	}
 
 	log.Debugf("PID %d tls offset: 0x%08X", pid, tlsOffset)
 
-	// module_id == 0 marks static TLS: no DTV indirection at unwind time.
-	procInfo := support.ThreadContextProcInfo{
-		Tls_offset: offset,
-	}
+	procInfo := support.ThreadContextProcInfo{Tls: tlsVar}
 	if err := ebpf.UpdateProcData(libpf.ThreadContext, pid, unsafe.Pointer(&procInfo)); err != nil {
 		return nil, err
 	}
@@ -428,9 +426,11 @@ func (i *Instance) UpdateLibcInfo(ebpf interpreter.EbpfHandler, pid libpf.PID, i
 		return nil
 	}
 	procInfo := support.ThreadContextProcInfo{
-		Tls_offset: i.tlsOffset,
-		Module_id:  i.moduleID,
-		Dtv_info:   info.DTVInfo,
+		Tls: support.TLSVarInfo{
+			Tls_offset: i.tlsOffset,
+			Module_id:  i.moduleID,
+			Dtv_info:   info.DTVInfo,
+		},
 	}
 	if err := ebpf.UpdateProcData(libpf.ThreadContext, pid, unsafe.Pointer(&procInfo)); err != nil {
 		return err
