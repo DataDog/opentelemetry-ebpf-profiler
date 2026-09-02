@@ -141,7 +141,7 @@ func loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	// A file with no TLS segment cannot define a thread-local, so skip the
 	// .symtab walk findSymbol falls back to. That walk allocates a Go string
 	// per symbol and runs for every mapped executable and library.
-	if getTLSProg(ef) == nil {
+	if ef.ProgByType(elf.PT_TLS) == nil {
 		return nil, nil
 	}
 

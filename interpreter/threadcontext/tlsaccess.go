@@ -151,20 +151,11 @@ func roundUp(value, alignment uint64) uint64 {
 	return (value + alignment - 1) &^ (alignment - 1)
 }
 
-func getTLSProg(ef *pfelf.File) *pfelf.Prog {
-	for _, prog := range ef.Progs {
-		if prog.Type == elf.PT_TLS {
-			return &prog
-		}
-	}
-	return nil
-}
-
 // getStaticTLSOffset computes the thread-pointer-relative offset of a local-exec
 // TLS variable defined in the main executable's static TLS block. sym.Address is
 // the symbol's offset within the PT_TLS image.
 func getStaticTLSOffset(ef *pfelf.File, sym *libpf.Symbol) (uint64, error) {
-	tlsProg := getTLSProg(ef)
+	tlsProg := ef.ProgByType(elf.PT_TLS)
 	if tlsProg == nil {
 		return 0, fmt.Errorf("failed to locate TLS segment")
 	}
