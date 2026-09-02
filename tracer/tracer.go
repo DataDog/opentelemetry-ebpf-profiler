@@ -1101,14 +1101,15 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 			log.Warnf("Thread context payload size %d exceeds the %d byte buffer "+
 				"for PID %d, skipping labels",
 				size, len(ptr.Custom_labels_data.Data), trace.PID)
+		} else if size == 0 {
+			// The common case: a process publishing only trace/span IDs sends no
+			// attributes, so skip the decode and its map allocation.
 		} else if dec := t.processManager.LabelDecoderForPID(trace.PID); dec != nil {
 			// Key indices mean nothing without the schema the process published.
 			// A PID with none can be permanent (no publisher, or an unsupported
 			// schema version), not just a startup/exit race.
 			trace.CustomLabels = dec.DecodeLabels(ptr.Custom_labels_data.Data[:size])
-		} else if size > 0 {
-			// An empty payload is the common case for a process that publishes
-			// only trace/span IDs, so counting it would swamp the metric.
+		} else {
 			t.threadContextLabelsDropped.Add(1)
 		}
 	}
