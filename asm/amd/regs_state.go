@@ -210,8 +210,18 @@ func regMappingFor(reg x86asm.Reg) regEntry {
 
 func (r *Registers) setX86asm(reg x86asm.Reg, v expression.Expression) {
 	e := regMappingFor(reg)
-	if e.bits != 64 {
-		v = expression.ZeroExtend(v, e.bits)
+	switch {
+	case e.bits >= 64:
+	case e.bits == 32:
+		// A 32-bit write zeroes the upper half.
+		v = expression.ZeroExtend(v, 32)
+	default:
+		// An 8- or 16-bit write leaves the rest of the register alone. The low
+		// bits of Clear are zero, so Add here is an OR.
+		v = expression.Add(
+			expression.Clear(r.regs[e.idx], uint(e.bits)),
+			expression.ZeroExtend(v, e.bits),
+		)
 	}
 	r.regs[e.idx] = v
 }

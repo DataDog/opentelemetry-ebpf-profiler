@@ -133,7 +133,8 @@ func TestRecoverSwitchCase(t *testing.T) {
 				),
 				4,
 			),
-			64,
+			// movsxd reads a dword, so the sign extension is from 32 bits.
+			32,
 		),
 		base,
 	)
@@ -173,8 +174,43 @@ func TestMoveSignExtend(t *testing.T) {
 	})
 	_, err := i.Loop()
 	require.ErrorIs(t, err, io.EOF)
-	pattern := expression.SignExtend(expression.Mem(expression.Imm(7), 2), 64)
+	// movsx reads a word, so the sign extension is from 16 bits.
+	pattern := expression.SignExtend(expression.Mem(expression.Imm(7), 2), 16)
 	require.True(t, i.Regs.Get(RAX).Match(pattern))
+}
+
+func TestSubRegisterWritePreservesUpperBits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code []byte
+		want uint64
+	}{
+		// mov rax,0x1234 ; mov al,1
+		{"8-bit keeps upper", []byte{
+			0x48, 0xc7, 0xc0, 0x34, 0x12, 0x00, 0x00, 0xb0, 0x01}, 0x1201},
+		// mov rax,0x11223344 ; mov ax,0x5566
+		{"16-bit keeps upper", []byte{
+			0x48, 0xc7, 0xc0, 0x44, 0x33, 0x22, 0x11, 0x66, 0xb8, 0x66, 0x55}, 0x11225566},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := NewInterpreterWithCode(tc.code)
+			_, err := it.Loop()
+			require.ErrorIs(t, err, io.EOF)
+			require.True(t, it.Regs.Get(RAX).Match(expression.Imm(tc.want)),
+				"got %s", it.Regs.Get(RAX).DebugString())
+		})
+	}
+}
+
+func TestShiftCountIsMasked(t *testing.T) {
+	// mov rax,1 ; shl rax,64
+	// The count masks to 0, so rax is unchanged.
+	it := NewInterpreterWithCode([]byte{
+		0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, 0x48, 0xc1, 0xe0, 0x40})
+	_, err := it.Loop()
+	require.ErrorIs(t, err, io.EOF)
+	require.True(t, it.Regs.Get(RAX).Match(expression.Imm(1)),
+		"got %s", it.Regs.Get(RAX).DebugString())
 }
 
 func TestSub(t *testing.T) {

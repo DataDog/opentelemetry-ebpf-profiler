@@ -108,9 +108,14 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 	case x86asm.SHL:
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
 			if src, imm := inst.Args[1].(x86asm.Imm); imm {
+				// x86 masks the count to 5 bits, or 6 with a 64-bit operand.
+				mask := uint64(31)
+				if regMappingFor(dst).bits == 64 {
+					mask = 63
+				}
 				v := expression.Multiply(
 					i.Regs.GetX86(dst),
-					expression.Imm(uint64(math.Pow(2, float64(src)))),
+					expression.Imm(uint64(1)<<(uint64(src)&mask)),
 				)
 				i.Regs.setX86asm(dst, v)
 			}
@@ -121,7 +126,11 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 			case x86asm.Imm:
 				i.Regs.setX86asm(dst, expression.Imm(uint64(src)))
 			case x86asm.Reg:
-				i.Regs.setX86asm(dst, i.Regs.GetX86(src))
+				v := i.Regs.GetX86(src)
+				if isSignExtending(inst.Op) {
+					v = expression.SignExtend(v, regMappingFor(src).bits)
+				}
+				i.Regs.setX86asm(dst, v)
 			case x86asm.Mem:
 				var v expression.Expression
 				if src.Base == x86asm.RIP {
@@ -131,13 +140,16 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 				} else {
 					v = i.MemArg(src)
 				}
-				dataSizeBits := inst.DataSize
-
 				v = expression.MemWithSegment(src.Segment, v, inst.MemBytes)
-				if inst.Op == x86asm.MOVSXD || inst.Op == x86asm.MOVSX {
-					v = expression.SignExtend(v, dataSizeBits)
-				} else {
-					v = expression.ZeroExtend(v, dataSizeBits)
+				// Extend from the width read. inst.DataSize is the
+				// destination's, always 64 for MOVSX, which would make the
+				// sign extension a no-op.
+				if srcBits := inst.MemBytes * 8; srcBits > 0 {
+					if isSignExtending(inst.Op) {
+						v = expression.SignExtend(v, srcBits)
+					} else {
+						v = expression.ZeroExtend(v, srcBits)
+					}
 				}
 				i.Regs.setX86asm(dst, v)
 			}
@@ -168,6 +180,10 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 	default:
 	}
 	return inst, nil
+}
+
+func isSignExtending(op x86asm.Op) bool {
+	return op == x86asm.MOVSX || op == x86asm.MOVSXD
 }
 
 // immFromDisp builds an immediate from an x86asm displacement. x86asm doesn't
