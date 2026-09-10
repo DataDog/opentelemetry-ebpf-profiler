@@ -113,11 +113,8 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 				if regMappingFor(dst).bits == 64 {
 					mask = 63
 				}
-				v := expression.Multiply(
-					i.Regs.GetX86(dst),
-					expression.Imm(uint64(1)<<(uint64(src)&mask)),
-				)
-				i.Regs.setX86asm(dst, v)
+				count := uint(uint64(src) & mask)
+				i.Regs.setX86asm(dst, expression.ShiftLeft(i.Regs.GetX86(dst), count))
 			}
 		}
 	case x86asm.MOV, x86asm.MOVZX, x86asm.MOVSXD, x86asm.MOVSX:
@@ -141,15 +138,14 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 					v = i.MemArg(src)
 				}
 				v = expression.MemWithSegment(src.Segment, v, inst.MemBytes)
-				// Extend from the width read. inst.DataSize is the
-				// destination's, always 64 for MOVSX, which would make the
-				// sign extension a no-op.
-				if srcBits := inst.MemBytes * 8; srcBits > 0 {
-					if isSignExtending(inst.Op) {
-						v = expression.SignExtend(v, srcBits)
-					} else {
-						v = expression.ZeroExtend(v, srcBits)
-					}
+				// inst.DataSize is the destination width (64 for MOVSX), so
+				// extend from the width actually read. MemBytes is 1/2/4/8 for
+				// every MOV/MOVZX/MOVSX/MOVSXD memory operand, never 0.
+				srcBits := inst.MemBytes * 8
+				if isSignExtending(inst.Op) {
+					v = expression.SignExtend(v, srcBits)
+				} else {
+					v = expression.ZeroExtend(v, srcBits)
 				}
 				i.Regs.setX86asm(dst, v)
 			}
