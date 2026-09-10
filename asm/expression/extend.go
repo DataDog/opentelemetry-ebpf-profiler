@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 package expression // import "go.opentelemetry.io/ebpf-profiler/asm/expression"
-import (
-	"fmt"
-	"math"
-)
+import "fmt"
 
 var _ Expression = &extend{}
 
@@ -18,7 +15,7 @@ func SignExtend8(v Expression) Expression {
 }
 
 func SignExtend(v Expression, bits int) Expression {
-	return &extend{v, bits, true}
+	return extendTo(v, bits, true)
 }
 
 func ZeroExtend32(v Expression) Expression {
@@ -30,46 +27,52 @@ func ZeroExtend8(v Expression) Expression {
 }
 
 func ZeroExtend(v Expression, bits int) Expression {
+	return extendTo(v, bits, false)
+}
+
+// extendTo keeps the low bits of v and fills the rest from the sign bit or
+// with zeroes. Allocates only when the result cannot be folded: every write to
+// a 64-bit register goes through here.
+func extendTo(v Expression, bits int, sign bool) Expression {
 	if bits >= 64 {
-		bits = 64
+		return v
 	}
-	c := &extend{
-		v:    v,
-		bits: bits,
-	}
-	if c.bits == 0 {
+	if bits == 0 {
 		return Imm(0)
 	}
-	if c.bits == 64 {
-		return c.v
-	}
-	switch typed := c.v.(type) {
+	switch typed := v.(type) {
 	case *immediate:
-		return Imm(typed.Value & c.MaxValue())
+		if sign {
+			shift := 64 - bits
+			return Imm(uint64(int64(typed.Value<<shift) >> shift))
+		}
+		return Imm(typed.Value & (1<<bits - 1))
 	case *extend:
-		if typed.sign {
-			return c
+		if sign {
+			// Only the low bits survive, so an inner extend narrower than this
+			// one already determines the result. A zero-extend of exactly bits
+			// does not: its top bit is data here, but was padding there.
+			if typed.bits < bits || (typed.sign && typed.bits == bits) {
+				return typed
+			}
+			return &extend{typed.v, bits, true}
 		}
-		if typed.bits <= c.bits {
-			return typed
+		if !typed.sign {
+			if typed.bits <= bits {
+				return typed
+			}
+			return &extend{typed.v, bits, false}
 		}
-		return &extend{typed.v, c.bits, false}
-	default:
-		return c
+		// A sign-extend under a zero-extend keeps both: the inner sign bits
+		// are data the outer one must preserve.
 	}
+	return &extend{v, bits, sign}
 }
 
 type extend struct {
 	v    Expression
 	bits int
 	sign bool
-}
-
-func (c *extend) MaxValue() uint64 {
-	if c.bits >= 64 || c.sign {
-		return math.MaxUint64
-	}
-	return 1<<c.bits - 1
 }
 
 func (c *extend) Match(pattern Expression) bool {
