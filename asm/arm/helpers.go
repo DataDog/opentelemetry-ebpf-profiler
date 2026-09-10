@@ -4,7 +4,6 @@
 package arm // import "go.opentelemetry.io/ebpf-profiler/asm/arm"
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -25,8 +24,10 @@ func Xreg2num(arg any) (int, bool) {
 	case aa.RegExtshiftAmount:
 		// Similar to other instructions, fields of RegExtshiftAmount are not exported.
 		// https://github.com/golang/go/issues/51517
-		n, ok := DecodeRegister(arg.(aa.RegExtshiftAmount).String())
-		if !ok {
+		n, extshift, _, ok := DecodeRegExtshiftAmount(reg)
+		// An extended or shifted operand is not the register's own value, and
+		// callers compare register numbers.
+		if !ok || extshift != "" {
 			return 0, false
 		}
 		ndx = n
@@ -116,35 +117,75 @@ func DecodeRegister(reg string) (aa.Reg, bool) {
 // forms DecodeRegister cannot name.
 func DecodeRegExtshiftAmount(arg aa.RegExtshiftAmount) (reg aa.Reg,
 	extshift string, amount uint, ok bool) {
-	var fields [2]string
-	n := stringutil.SplitN(arg.String(), ",", fields[:])
-	if n == 0 || n > 2 {
-		return 0, "", 0, false
+	regStr, rest, hasRest := strings.Cut(arg.String(), ",")
+	reg, ok = DecodeRegister(strings.TrimSpace(regStr))
+	if !ok || !hasRest {
+		return reg, "", 0, ok
 	}
-	reg, ok = DecodeRegister(strings.TrimSpace(fields[0]))
-	if !ok {
-		return 0, "", 0, false
-	}
-	if n == 1 {
-		return reg, "", 0, true
-	}
-	extshift = strings.TrimSpace(fields[1])
 	// The amount is optional: "SXTW" alone means "SXTW #0".
-	if pos := strings.Index(extshift, "#"); pos != -1 {
-		v, err := strconv.ParseUint(strings.TrimSpace(extshift[pos+1:]), 10, 6)
+	extshift, amountStr, hasAmount := strings.Cut(rest, "#")
+	if hasAmount {
+		v, err := strconv.ParseUint(strings.TrimSpace(amountStr), 10, 6)
 		if err != nil {
 			return 0, "", 0, false
 		}
 		amount = uint(v)
-		extshift = strings.TrimSpace(extshift[:pos])
 	}
-	return reg, extshift, amount, true
+	return reg, strings.TrimSpace(extshift), amount, true
+}
+
+// parseImmField extracts the immediate introduced by '#', stopping at a
+// closing bracket or comma. Base 0, because arm64asm prints ImmShift in hex
+// and MemImmediate in decimal.
+func parseImmField(s string) (int64, bool) {
+	_, num, ok := strings.Cut(s, "#")
+	if !ok {
+		return 0, false
+	}
+	if i := strings.IndexAny(num, ",]"); i != -1 {
+		num = num[:i]
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(num), 0, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// decodeImmShift converts an ImmShift's rendering ("#0x1", "#0x1, LSL #12",
+// "#0x1, MSL #8") to its shifted value. LSL pads the vacated low bits with 0,
+// MSL with 1. ImmShift has no public fields.
+// https://github.com/golang/go/issues/51517
+func decodeImmShift(is aa.ImmShift) (int64, bool) {
+	base, shift, hasShift := strings.Cut(is.String(), ",")
+	imm, ok := parseImmField(base)
+	if !ok || !hasShift {
+		return imm, ok
+	}
+	kind, amountStr, hasAmount := strings.Cut(strings.TrimSpace(shift), "#")
+	if !hasAmount {
+		return 0, false
+	}
+	amount, err := strconv.ParseUint(strings.TrimSpace(amountStr), 10, 8)
+	if err != nil {
+		return 0, false
+	}
+	switch strings.TrimSpace(kind) {
+	case "LSL":
+		return imm << amount, true
+	case "MSL":
+		return imm<<amount | (int64(1)<<amount - 1), true
+	default:
+		return 0, false
+	}
 }
 
 // DecodeImmediate converts an arm64asm Arg of immediate type to it's value.
 func DecodeImmediate(arg aa.Arg) (int64, bool) {
 	switch val := arg.(type) {
 	case aa.Imm:
+		return int64(val.Imm), true
+	case aa.Imm64:
 		return int64(val.Imm), true
 	case aa.PCRel:
 		return int64(val), true
@@ -172,8 +213,7 @@ func DecodeImmediate(arg aa.Arg) (int64, bool) {
 		// In all other cases we want to split the string around the comma and
 		// extract the second number. Note that the string will start with a #
 		// in all but one case (namely, AddrPostReg).
-		pos := strings.Index(fields[1], "#")
-		if pos == -1 {
+		if !strings.Contains(fields[1], "#") {
 			// We have a string that looks like this:
 			// [%s], %s
 			// Note that the second %s here is the print
@@ -188,33 +228,11 @@ func DecodeImmediate(arg aa.Arg) (int64, bool) {
 			return int64(reg - aa.X0), true
 		}
 
-		// For AddrOffset/AddrPreIndex the format is "[Xn, #imm]" or "[Xn, #imm]!",
-		// so "]" is present in fields[1].
-		// For AddrPostIndex the format is "[Xn], #imm", so "]" is only in fields[0].
-		endIndex := strings.Index(fields[1], "]")
-		var numStr string
-		if endIndex == -1 {
-			// Post-index case: no "]" in the offset field; parse to end of string.
-			numStr = strings.TrimSpace(fields[1][pos+1:])
-		} else {
-			numStr = fields[1][pos+1 : endIndex]
-		}
-		// The strings are base 10 encoded
-		out, err := strconv.ParseInt(numStr, 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return out, true
+		// Only "[Xn, #imm]" and "[Xn, #imm]!" keep the "]" in fields[1].
+		return parseImmField(fields[1])
 
 	case aa.ImmShift:
-		// Sadly, ImmShift{} does not have public fields.
-		// https://github.com/golang/go/issues/51517
-		var imm int64
-		n, err := fmt.Sscanf(val.String(), "#%v", &imm)
-		if err != nil || n != 1 {
-			return 0, false
-		}
-		return imm, true
+		return decodeImmShift(val)
 	}
 
 	return 0, false

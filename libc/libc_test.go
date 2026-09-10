@@ -235,6 +235,32 @@ func TestExtractTSDInfo(t *testing.T) {
 				Multiplier: 16,
 			},
 		},
+		// Synthetic: the glibc 2.35 sequence with "uxtw #4" replaced by a bare
+		// "uxtw", which arm64asm prints without a "#N". The extend still
+		// applies, with an amount of 0.
+		"arm64 extend without shift amount": {
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x3f, 0x23, 0x03, 0xd5, // paciasp
+				0xfd, 0x7b, 0xbf, 0xa9, // stp     x29, x30, [sp, #-16]!
+				0xe1, 0x03, 0x00, 0x2a, // mov     w1, w0
+				0xfd, 0x03, 0x00, 0x91, // mov     x29, sp
+				0x1f, 0x7c, 0x00, 0x71, // cmp     w0, #0x1f
+				0x28, 0x02, 0x00, 0x54, // b.hi
+				// mov     x0, #0xfffffffffffff9d0         // #-1584
+				0xe0, 0xc5, 0x80, 0x92,
+				0x42, 0xd0, 0x3b, 0xd5, // mrs     x2, tpidr_el0
+				0x00, 0x40, 0x21, 0x8b, // add     x0, x0, w1, uxtw
+				0x42, 0x00, 0x00, 0x8b, // add     x2, x2, x0
+				0x40, 0x04, 0x40, 0xf9, // ldr     x0, [x2, #8]
+				0x00, 0x03, 0x00, 0xb4, // cbz     x0
+				0xc0, 0x03, 0x5f, 0xd6, // ret
+			},
+			info: TSDInfo{
+				Offset:     -1584 + 8,
+				Multiplier: 1,
+			},
+		},
 		"booking coredump glibc": {
 			machine: elf.EM_X86_64,
 			code: []byte{

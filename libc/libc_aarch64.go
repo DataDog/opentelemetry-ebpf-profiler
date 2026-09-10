@@ -5,12 +5,10 @@ package libc // import "go.opentelemetry.io/ebpf-profiler/libc"
 
 import (
 	"errors"
-	"fmt"
 
 	aa "golang.org/x/arch/arm64/arm64asm"
 
 	"go.opentelemetry.io/ebpf-profiler/asm/arm"
-	"go.opentelemetry.io/ebpf-profiler/stringutil"
 )
 
 const (
@@ -193,21 +191,15 @@ func extractTSDInfoARM(code []byte) (TSDInfo, error) {
 				regs[destReg] = regs[srcReg]
 				regs[destReg].offset += i
 			case aa.RegExtshiftAmount:
-				regStr := inst.Args[2].String()
-				shift := int(0)
-				var fields [2]string
-				if stringutil.SplitN(regStr, ",", fields[:]) == 2 {
-					regStr = fields[0]
-					n, err := fmt.Sscanf(fields[1], " LSL #%v", &shift)
-					if n != 1 || err != nil {
-						n, err := fmt.Sscanf(fields[1], " UXTW #%v", &shift)
-						if n != 1 || err != nil {
-							continue
-						}
-					}
-				}
-				reg, ok := arm.DecodeRegister(regStr)
+				reg, extshift, shift, ok := arm.DecodeRegExtshiftAmount(a2)
 				if !ok {
+					continue
+				}
+				// offset<<n cannot express SXTW or the byte/halfword forms:
+				// they truncate or sign-extend the tracked value.
+				switch extshift {
+				case "", "LSL", "UXTW":
+				default:
 					continue
 				}
 				srcReg2, ok := arm.Xreg2num(reg)
