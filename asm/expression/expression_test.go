@@ -142,3 +142,27 @@ func TestExpression(t *testing.T) {
 		require.False(t, n1.Match(n3))
 	})
 }
+
+// TestMatchIsCommutative covers the operands cmpOrder ranks equally: different
+// kinds are already ordered by it.
+func TestMatchIsCommutative(t *testing.T) {
+	a, b, c := Named("a"), Named("b"), Named("c")
+	m1, m2 := Mem8(Named("p")), Mem8(Named("q"))
+
+	for _, tc := range []struct {
+		name        string
+		left, right Expression
+	}{
+		{"two named", Add(a, b), Add(b, a)},
+		{"three named", Add(a, b, c), Add(c, b, a)},
+		{"two mem", Add(m1, m2), Add(m2, m1)},
+		{"mul", Multiply(a, b), Multiply(b, a)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, tc.left.Match(tc.right), "%s vs %s",
+				tc.left.DebugString(), tc.right.DebugString())
+			require.True(t, tc.right.Match(tc.left), "%s vs %s",
+				tc.right.DebugString(), tc.left.DebugString())
+		})
+	}
+}

@@ -55,7 +55,13 @@ func (s sortedOperands) Len() int {
 func (s sortedOperands) Less(i, j int) bool {
 	o1 := cmpOrder(s[i])
 	o2 := cmpOrder(s[j])
-	return o1 < o2
+	if o1 != o2 {
+		return o1 < o2
+	}
+	// cmpOrder ranks kinds, not values, so on its own it leaves operands of the
+	// same kind in construction order and Add(a, b).Match(Add(b, a)) fails.
+	// DebugString is a structural key, so it orders both sides alike.
+	return s[i].DebugString() < s[j].DebugString()
 }
 
 func (s sortedOperands) Swap(i, j int) {
