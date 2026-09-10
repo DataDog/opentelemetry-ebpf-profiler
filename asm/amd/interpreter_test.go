@@ -143,6 +143,15 @@ func TestRecoverSwitchCase(t *testing.T) {
 	assert.EqualValues(t, 0xf3f82c, base.CapturedValue())
 }
 
+// assertRAX runs code to completion and checks that RAX holds want.
+func assertRAX(t *testing.T, code []byte, want uint64) {
+	t.Helper()
+	it := NewInterpreterWithCode(code)
+	_, err := it.Loop()
+	require.ErrorIs(t, err, io.EOF)
+	assertEval(t, it.Regs.Get(RAX), expression.Imm(want))
+}
+
 func assertEval(t *testing.T, left, right expression.Expression) {
 	t.Helper()
 	if !left.Match(right) {
@@ -179,6 +188,40 @@ func TestMoveSignExtend(t *testing.T) {
 	require.True(t, i.Regs.Get(RAX).Match(pattern))
 }
 
+// TestMoveSignExtendRegister covers the reg-to-reg branch, which
+// TestMoveSignExtend does not reach.
+func TestMoveSignExtendRegister(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code []byte
+		want uint64
+	}{
+		{
+			// mov ebx,-1 ; movsxd rax,ebx
+			name: "movsxd from 32 bits",
+			code: []byte{0xbb, 0xff, 0xff, 0xff, 0xff, 0x48, 0x63, 0xc3},
+			want: 0xffffffffffffffff,
+		},
+		{
+			// mov ebx,-1 ; movsx rax,bl
+			name: "movsx from 8 bits",
+			code: []byte{0xbb, 0xff, 0xff, 0xff, 0xff, 0x48, 0x0f, 0xbe, 0xc3},
+			want: 0xffffffffffffffff,
+		},
+		{
+			// mov ebx,0x7f ; movsx rax,bl
+			// Positive source: the upper bits stay clear.
+			name: "movsx keeps positive",
+			code: []byte{0xbb, 0x7f, 0x00, 0x00, 0x00, 0x48, 0x0f, 0xbe, 0xc3},
+			want: 0x7f,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertRAX(t, tc.code, tc.want)
+		})
+	}
+}
+
 func TestSubRegisterWritePreservesUpperBits(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -193,24 +236,38 @@ func TestSubRegisterWritePreservesUpperBits(t *testing.T) {
 			0x48, 0xc7, 0xc0, 0x44, 0x33, 0x22, 0x11, 0x66, 0xb8, 0x66, 0x55}, 0x11225566},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			it := NewInterpreterWithCode(tc.code)
-			_, err := it.Loop()
-			require.ErrorIs(t, err, io.EOF)
-			require.True(t, it.Regs.Get(RAX).Match(expression.Imm(tc.want)),
-				"got %s", it.Regs.Get(RAX).DebugString())
+			assertRAX(t, tc.code, tc.want)
 		})
 	}
 }
 
 func TestShiftCountIsMasked(t *testing.T) {
-	// mov rax,1 ; shl rax,64
-	// The count masks to 0, so rax is unchanged.
-	it := NewInterpreterWithCode([]byte{
-		0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, 0x48, 0xc1, 0xe0, 0x40})
-	_, err := it.Loop()
-	require.ErrorIs(t, err, io.EOF)
-	require.True(t, it.Regs.Get(RAX).Match(expression.Imm(1)),
-		"got %s", it.Regs.Get(RAX).DebugString())
+	for _, tc := range []struct {
+		name string
+		code []byte
+		want uint64
+	}{
+		{
+			// mov rax,1 ; shl rax,40
+			// A 64-bit operand masks the count to 6 bits, leaving 40. The
+			// 5-bit mask would leave 8, so this tells the two apart.
+			name: "64-bit masks to 6 bits",
+			code: []byte{
+				0x48, 0xc7, 0xc0, 0x01, 0x00, 0x00, 0x00, 0x48, 0xc1, 0xe0, 0x28},
+			want: 1 << 40,
+		},
+		{
+			// mov eax,1 ; shl eax,40
+			// A 32-bit operand masks to 5 bits, leaving 8.
+			name: "32-bit masks to 5 bits",
+			code: []byte{0xb8, 0x01, 0x00, 0x00, 0x00, 0xc1, 0xe0, 0x28},
+			want: 1 << 8,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertRAX(t, tc.code, tc.want)
+		})
+	}
 }
 
 func TestSub(t *testing.T) {
