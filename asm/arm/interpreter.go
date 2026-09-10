@@ -68,7 +68,7 @@ const (
 
 // maybeHandleLoadStore checks if an instruction is a load or store, processing it if so.
 // The first return value is true if we attempted to process the instruction.
-func (i *Interpreter) maybeHandleLoadStore(inst arm64asm.Inst, pc expression.Expression) (bool, error) {
+func (i *Interpreter) maybeHandleLoadStore(inst arm64asm.Inst, instPC uint64) (bool, error) {
 	// TODO: There are tons of load/store instructions. Fill in new ones if/when we need them.
 	var isLoad bool
 	switch inst.Op {
@@ -107,21 +107,12 @@ func (i *Interpreter) maybeHandleLoadStore(inst arm64asm.Inst, pc expression.Exp
 			}
 
 		case arm64asm.MemExtend:
-			base := i.Regs.GetArmSP(src.Base)
-			idx := i.Regs.GetArm(src.Index)
-			var ext expression.Expression
-			switch src.Extend.String() {
-			case "UXTW":
-				ext = expression.ZeroExtend32(idx)
-			case "SXTW":
-				ext = expression.SignExtend32(idx)
-			default:
-				ext = idx
+			if ext, ok := applyExtend(src.Extend.String(), i.Regs.GetArm(src.Index)); ok {
+				memAddr = expression.Add(i.Regs.GetArmSP(src.Base),
+					expression.ShiftLeft(ext, uint(src.Amount)))
 			}
-
-			memAddr = expression.Add(base, expression.Multiply(ext, expression.Imm(uint64(1)<<uint64(src.Amount))))
 		case arm64asm.PCRel:
-			memAddr = expression.Add(pc, expression.Imm(uint64(src)))
+			memAddr = expression.Add(i.instAddr(instPC), expression.Imm(uint64(src)))
 		}
 		if memAddr != nil {
 			if isLoad {
@@ -143,35 +134,47 @@ func (i *Interpreter) maybeHandleLoadStore(inst arm64asm.Inst, pc expression.Exp
 	return false, nil
 }
 
+// applyExtend applies an arm64 extend or shift name to v. It reports false for
+// LSR, ASR and ROR, which the expression language cannot represent.
+func applyExtend(name string, v expression.Expression) (expression.Expression, bool) {
+	switch name {
+	case "", "LSL", "UXTX", "SXTX":
+		return v, true
+	case "UXTW":
+		return expression.ZeroExtend(v, 32), true
+	case "SXTW":
+		return expression.SignExtend(v, 32), true
+	case "UXTH":
+		return expression.ZeroExtend(v, 16), true
+	case "SXTH":
+		return expression.SignExtend(v, 16), true
+	case "UXTB":
+		return expression.ZeroExtend(v, 8), true
+	case "SXTB":
+		return expression.SignExtend(v, 8), true
+	}
+	return nil, false
+}
+
 // regExtshift evaluates the third operand of an ALU instruction, which
 // arm64asm always reports as a RegExtshiftAmount even for a bare register.
-// It returns nil for the right shifts, which the expression language cannot
-// represent.
+// Returns nil when the operand cannot be modeled.
 func (i *Interpreter) regExtshift(arg arm64asm.RegExtshiftAmount) expression.Expression {
 	reg, extshift, amount, ok := DecodeRegExtshiftAmount(arg)
 	if !ok {
 		return nil
 	}
-	v := i.Regs.GetArm(reg)
-	switch extshift {
-	case "", "LSL", "UXTX", "SXTX":
-	case "UXTW":
-		v = expression.ZeroExtend32(v)
-	case "SXTW":
-		v = expression.SignExtend32(v)
-	case "UXTH":
-		v = expression.ZeroExtend(v, 16)
-	case "SXTH":
-		v = expression.SignExtend(v, 16)
-	case "UXTB":
-		v = expression.ZeroExtend8(v)
-	case "SXTB":
-		v = expression.SignExtend8(v)
-	default:
-		// LSR, ASR and ROR.
+	v, ok := applyExtend(extshift, i.Regs.GetArm(reg))
+	if !ok {
 		return nil
 	}
-	return expression.Multiply(v, expression.Imm(uint64(1)<<amount))
+	return expression.ShiftLeft(v, amount)
+}
+
+// instAddr is the address of the instruction at offset pc. The PC register is
+// unusable here: it holds its seed name until the first Step writes it.
+func (i *Interpreter) instAddr(pc uint64) expression.Expression {
+	return expression.Add(i.CodeAddress, expression.Imm(pc))
 }
 
 func (i *Interpreter) Step() (arm64asm.Inst, error) {
@@ -182,14 +185,11 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 	if err != nil {
 		return inst, fmt.Errorf("at 0x%x : %v", i.pc, err)
 	}
-	// PC reads as the address of the instruction being executed. Derive it
-	// rather than reading the register, which still holds its seed name until
-	// the first Step writes it.
-	oldPC := expression.Add(i.CodeAddress, expression.Imm(i.pc))
+	instPC := i.pc
 	i.pc += uint64(InstSz)
 	i.code = i.code[InstSz:]
-	i.Regs.setPC(expression.Add(i.CodeAddress, expression.Imm(uint64(i.pc))))
-	if ok, err := i.maybeHandleLoadStore(inst, oldPC); ok {
+	i.Regs.setPC(i.instAddr(i.pc))
+	if ok, err := i.maybeHandleLoadStore(inst, instPC); ok {
 		return inst, err
 	}
 	switch inst.Op {
@@ -207,9 +207,7 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 			right = i.Regs.GetArmSP(rightArg)
 		case arm64asm.Reg:
 			right = i.Regs.GetArm(rightArg)
-		case arm64asm.Imm:
-			right = expression.Imm(uint64(rightArg.Imm))
-		case arm64asm.ImmShift:
+		case arm64asm.Imm, arm64asm.ImmShift:
 			if imm, ok := DecodeImmediate(rightArg); ok {
 				right = expression.Imm(uint64(imm))
 			}
@@ -231,12 +229,9 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 	case arm64asm.MOV:
 		var v expression.Expression
 		switch src := inst.Args[1].(type) {
-		case arm64asm.Imm:
+		case arm64asm.Imm, arm64asm.Imm64:
 			imm, _ := DecodeImmediate(src)
 			v = expression.Imm(uint64(imm))
-		case arm64asm.Imm64:
-			// The 64-bit wide-immediate form, e.g. `mov x0, #1`.
-			v = expression.Imm(src.Imm)
 		case arm64asm.Reg:
 			v = i.Regs.GetArm(src)
 		case arm64asm.RegSP:
@@ -253,7 +248,7 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 	case arm64asm.ADRP:
 		if src, ok := inst.Args[1].(arm64asm.PCRel); ok {
 			if dst, ok := inst.Args[0].(arm64asm.Reg); ok {
-				pcPage := expression.Clear(oldPC, 12)
+				pcPage := expression.Clear(i.instAddr(instPC), 12)
 				i.Regs.setArm64asm(dst, expression.Add(pcPage, expression.Imm(uint64(src))))
 			}
 		}

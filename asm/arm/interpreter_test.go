@@ -97,94 +97,78 @@ func insns(words ...uint32) []byte {
 	return b
 }
 
+// runCode interprets words to completion.
+func runCode(t *testing.T, words ...uint32) *Interpreter {
+	t.Helper()
+	it := NewInterpreterWithCode(insns(words...))
+	_, err := it.Loop()
+	require.ErrorIs(t, err, io.EOF)
+	return it
+}
+
 // TestRegExtshiftAmount covers the third ALU operand: arm64asm reports it as a
 // RegExtshiftAmount even for a bare register.
 func TestRegExtshiftAmount(t *testing.T) {
+	x0, x1, x2 := expression.Named("X0"), expression.Named("X1"), expression.Named("X2")
 	for _, tc := range []struct {
 		name string
 		code uint32
-		// want builds the expectation from the interpreter's own register
-		// expressions. nil means the operand is not modeled, so X0 is untouched.
-		want func(it *Interpreter) expression.Expression
+		want expression.Expression
 	}{
 		{
 			name: "bare register",
 			code: 0x8b020020, // add x0, x1, x2
-			want: func(it *Interpreter) expression.Expression {
-				return expression.Add(it.Regs.Get(X1), it.Regs.Get(X2))
-			},
+			want: expression.Add(x1, x2),
 		},
 		{
 			name: "lsl",
 			code: 0x8b020c20, // add x0, x1, x2, lsl #3
-			want: func(it *Interpreter) expression.Expression {
-				return expression.Add(it.Regs.Get(X1),
-					expression.Multiply(it.Regs.Get(X2), expression.Imm(8)))
-			},
+			want: expression.Add(x1, expression.Multiply(x2, expression.Imm(8))),
 		},
 		{
 			name: "sub lsl",
 			code: 0xcb020420, // sub x0, x1, x2, lsl #1
-			want: func(it *Interpreter) expression.Expression {
-				return expression.Add(it.Regs.Get(X1),
-					expression.Multiply(expression.Imm(^uint64(0)),
-						expression.Multiply(it.Regs.Get(X2), expression.Imm(2))))
-			},
+			want: expression.Add(x1, expression.Multiply(expression.Imm(^uint64(0)),
+				expression.Multiply(x2, expression.Imm(2)))),
 		},
 		{
 			name: "uxtw",
 			code: 0x8b224820, // add x0, x1, w2, uxtw #2
-			want: func(it *Interpreter) expression.Expression {
-				return expression.Add(it.Regs.Get(X1),
-					expression.Multiply(expression.ZeroExtend32(it.Regs.Get(X2)),
-						expression.Imm(4)))
-			},
+			want: expression.Add(x1,
+				expression.Multiply(expression.ZeroExtend32(x2), expression.Imm(4))),
 		},
 		{
+			// The 32-bit read is a zero-extend, which the sign-extend of the
+			// same width absorbs.
 			name: "sxtw",
 			code: 0x8b22c020, // add x0, x1, w2, sxtw
-			want: func(it *Interpreter) expression.Expression {
-				return expression.Add(it.Regs.Get(X1),
-					expression.SignExtend32(expression.ZeroExtend32(it.Regs.Get(X2))))
-			},
+			want: expression.Add(x1, expression.SignExtend(x2, 32)),
 		},
 		{
 			name: "32-bit operands",
 			code: 0x0b020020, // add w0, w1, w2
-			want: func(it *Interpreter) expression.Expression {
-				return expression.ZeroExtend32(expression.Add(
-					expression.ZeroExtend32(it.Regs.Get(X1)),
-					expression.ZeroExtend32(it.Regs.Get(X2))))
-			},
+			want: expression.ZeroExtend32(expression.Add(
+				expression.ZeroExtend32(x1), expression.ZeroExtend32(x2))),
 		},
 		{
-			// A right shift has no expression counterpart, so X0 keeps its
-			// entry value. This pins the gap rather than endorsing it.
+			// A right shift has no expression counterpart, so X0 keeps its entry
+			// value. This pins the gap rather than endorsing it.
 			name: "lsr is not modeled",
 			code: 0x8b420c20, // add x0, x1, x2, lsr #3
-			want: nil,
+			want: x0,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			it := NewInterpreterWithCode(insns(tc.code))
-			entryX0 := it.Regs.Get(X0)
-			_, err := it.Loop()
-			require.ErrorIs(t, err, io.EOF)
-
-			want := tc.want
-			if want == nil {
-				want = func(*Interpreter) expression.Expression { return entryX0 }
-			}
-			got := it.Regs.Get(X0)
-			require.True(t, got.Match(want(it)),
-				"got %s, want %s", got.DebugString(), want(it).DebugString())
+			got := runCode(t, tc.code).Regs.Get(X0)
+			require.True(t, got.Match(tc.want),
+				"got %s, want %s", got.DebugString(), tc.want.DebugString())
 		})
 	}
 }
 
 func TestADRPUsesCodeAddress(t *testing.T) {
 	// adrp x0, . at 0x1800 yields the page base 0x1000.
-	it := NewInterpreterWithCode(nil)
+	it := NewInterpreter()
 	it.ResetCode(insns(0x90000000), expression.Imm(0x1800))
 	_, err := it.Loop()
 	require.ErrorIs(t, err, io.EOF)
@@ -194,11 +178,8 @@ func TestADRPUsesCodeAddress(t *testing.T) {
 
 func TestMOVWideImmediate(t *testing.T) {
 	// mov x0, #1. The 64-bit form encodes its immediate as Imm64, not Imm.
-	it := NewInterpreterWithCode(insns(0xd2800020))
-	_, err := it.Loop()
-	require.ErrorIs(t, err, io.EOF)
-	require.True(t, it.Regs.Get(X0).Match(expression.Imm(1)),
-		"got %s", it.Regs.Get(X0).DebugString())
+	x0 := runCode(t, 0xd2800020).Regs.Get(X0)
+	require.True(t, x0.Match(expression.Imm(1)), "got %s", x0.DebugString())
 }
 
 // TestNegativeMemImmediate pins that a negative offset needs no special
@@ -212,13 +193,10 @@ func TestNegativeMemImmediate(t *testing.T) {
 		{"pre-index", 0xf81f0c20},  // str x0, [x1, #-16]!
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			it := NewInterpreterWithCode(insns(tc.code))
-			x1 := it.Regs.Get(X1)
-			_, err := it.Loop()
-			require.ErrorIs(t, err, io.EOF)
+			got := runCode(t, tc.code).Regs.Get(X1)
 			off := expression.NewImmediateCapture("off")
-			require.True(t, it.Regs.Get(X1).Match(expression.Add(x1, off)),
-				"got %s", it.Regs.Get(X1).DebugString())
+			require.True(t, got.Match(expression.Add(expression.Named("X1"), off)),
+				"got %s", got.DebugString())
 			require.Negative(t, int64(off.CapturedValue()))
 		})
 	}

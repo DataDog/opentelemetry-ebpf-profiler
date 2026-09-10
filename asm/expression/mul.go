@@ -3,6 +3,15 @@
 
 package expression // import "go.opentelemetry.io/ebpf-profiler/asm/expression"
 
+// ShiftLeft returns v << bits. bits must be below 64: callers apply the
+// architecture's count masking.
+func ShiftLeft(v Expression, bits uint) Expression {
+	if bits == 0 {
+		return v
+	}
+	return Multiply(v, Imm(uint64(1)<<bits))
+}
+
 func Multiply(vs ...Expression) Expression {
 	oss := make(operands, 0, len(vs)+1)
 	v := uint64(1)
