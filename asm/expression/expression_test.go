@@ -146,23 +146,21 @@ func TestExpression(t *testing.T) {
 // TestMatchIsCommutative covers the operands cmpOrder ranks equally: different
 // kinds are already ordered by it.
 func TestMatchIsCommutative(t *testing.T) {
-	a, b, c := Named("a"), Named("b"), Named("c")
-	m1, m2 := Mem8(Named("p")), Mem8(Named("q"))
+	a, b, c, z := Named("a"), Named("b"), Named("c"), Named("z")
 
-	for _, tc := range []struct {
-		name        string
-		left, right Expression
-	}{
-		{"two named", Add(a, b), Add(b, a)},
-		{"three named", Add(a, b, c), Add(c, b, a)},
-		{"two mem", Add(m1, m2), Add(m2, m1)},
-		{"mul", Multiply(a, b), Multiply(b, a)},
+	for _, tc := range [][2]Expression{
+		{Add(a, b, c), Add(c, b, a)},
+		{Add(Mem8(a), Mem8(b)), Add(Mem8(b), Mem8(a))},
+		{Multiply(a, b), Multiply(b, a)},
+		// Siblings are ranked by their operand lists, so without a canonical
+		// order an inner swap flips the sibling order: compare(a,b) < 0 but
+		// compare(z,c) > 0, and the two lists then pair up misaligned.
+		{Add(Multiply(a, z), Multiply(b, c)), Add(Multiply(z, a), Multiply(c, b))},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.True(t, tc.left.Match(tc.right), "%s vs %s",
-				tc.left.DebugString(), tc.right.DebugString())
-			require.True(t, tc.right.Match(tc.left), "%s vs %s",
-				tc.right.DebugString(), tc.left.DebugString())
-		})
+		left, right := tc[0], tc[1]
+		require.True(t, left.Match(right), "%s vs %s",
+			left.DebugString(), right.DebugString())
+		require.True(t, right.Match(left), "%s vs %s",
+			right.DebugString(), left.DebugString())
 	}
 }

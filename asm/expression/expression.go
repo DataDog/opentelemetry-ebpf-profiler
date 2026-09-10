@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 package expression // import "go.opentelemetry.io/ebpf-profiler/asm/expression"
-import "sort"
+
+import (
+	"cmp"
+	"slices"
+	"strings"
+)
 
 // Expression is an interface representing a 64-bit size value. It can be immediate
 type Expression interface {
@@ -24,48 +29,19 @@ type Expression interface {
 
 type operands []Expression
 
+// Match pairs operands positionally. Both sides are canonically ordered by
+// newOp, the only place an operands slice is built, so re-sorting here would
+// be a no-op.
 func (os *operands) Match(other operands) bool {
-	osLen := len(*os)
-	if osLen != len(other) {
+	if len(*os) != len(other) {
 		return false
 	}
-	// Sort copies, never the originals.  Sorting in-place mutates the
-	// expression tree, causing non-deterministic results when the same
-	// expression or pattern is reused across multiple Match() calls.
-	osCopy := make(operands, osLen)
-	copy(osCopy, *os)
-	otherCopy := make(operands, osLen)
-	copy(otherCopy, other)
-	sort.Sort(sortedOperands(osCopy))
-	sort.Sort(sortedOperands(otherCopy))
-	for i := range osCopy {
-		if !osCopy[i].Match(otherCopy[i]) {
+	for i, o := range *os {
+		if !o.Match(other[i]) {
 			return false
 		}
 	}
 	return true
-}
-
-type sortedOperands operands
-
-func (s sortedOperands) Len() int {
-	return len(s)
-}
-
-func (s sortedOperands) Less(i, j int) bool {
-	o1 := cmpOrder(s[i])
-	o2 := cmpOrder(s[j])
-	if o1 != o2 {
-		return o1 < o2
-	}
-	// cmpOrder ranks kinds, not values, so on its own it leaves operands of the
-	// same kind in construction order and Add(a, b).Match(Add(b, a)) fails.
-	// DebugString is a structural key, so it orders both sides alike.
-	return s[i].DebugString() < s[j].DebugString()
-}
-
-func (s sortedOperands) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
 }
 
 func cmpOrder(u Expression) int {
@@ -82,9 +58,65 @@ func cmpOrder(u Expression) int {
 		return 5
 	case *clear:
 		return 6
+	case *extend:
+		return 7
 	default:
 		return 0
 	}
+}
+
+// compare is a total order over expressions, used to pair the operands of a
+// commutative op. The tie-break within a kind has to be structural: DebugString
+// is a rendering, free to change and finer than the Match it canonicalizes.
+// Operands that compare equal are still paired positionally, as Match is not an
+// equivalence relation (immediate vs capture is asymmetric).
+func compare(a, b Expression) int {
+	if c := cmp.Compare(cmpOrder(a), cmpOrder(b)); c != 0 {
+		return c
+	}
+	// Equal cmpOrder ranks mean a and b are the same concrete type, so these
+	// assertions cannot fail. Unranked types fall through the switch.
+	switch x := a.(type) {
+	case *mem:
+		y := b.(*mem)
+		if c := cmp.Compare(x.segment, y.segment); c != 0 {
+			return c
+		}
+		// sizeBytes is deliberately not compared: mem.Match ignores it, and an
+		// order finer than Match would sort matching siblings apart.
+		return compare(x.at, y.at)
+	case *op:
+		y := b.(*op)
+		if c := cmp.Compare(x.typ, y.typ); c != 0 {
+			return c
+		}
+		return slices.CompareFunc(x.operands, y.operands, compare)
+	case *named:
+		return strings.Compare(x.name, b.(*named).name)
+	case *ImmediateCapture:
+		return strings.Compare(x.name, b.(*ImmediateCapture).name)
+	case *immediate:
+		return cmp.Compare(x.Value, b.(*immediate).Value)
+	case *clear:
+		y := b.(*clear)
+		if c := cmp.Compare(x.bits, y.bits); c != 0 {
+			return c
+		}
+		return compare(x.v, y.v)
+	case *extend:
+		y := b.(*extend)
+		if c := cmp.Compare(x.bits, y.bits); c != 0 {
+			return c
+		}
+		if x.sign != y.sign {
+			if x.sign {
+				return 1
+			}
+			return -1
+		}
+		return compare(x.v, y.v)
+	}
+	return 0
 }
 
 // AsConstant checks whether the value of the expression is statically known,

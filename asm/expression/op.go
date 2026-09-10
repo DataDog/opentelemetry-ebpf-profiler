@@ -5,6 +5,7 @@ package expression // import "go.opentelemetry.io/ebpf-profiler/asm/expression"
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -22,6 +23,9 @@ type op struct {
 }
 
 func newOp(typ opType, operands operands) Expression {
+	// Canonical operand order, so compare() pairs nested subtrees by value
+	// rather than by construction order. Callers pass a freshly built slice.
+	slices.SortFunc(operands, compare)
 	res := &op{typ: typ, operands: operands}
 
 	return res
