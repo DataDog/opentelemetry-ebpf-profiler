@@ -89,7 +89,8 @@ func (i *Interpreter) maybeHandleLoadStore(inst arm64asm.Inst, pc expression.Exp
 		case arm64asm.MemImmediate:
 			imm, _ := DecodeImmediate(src)
 			baseReg = src.Base
-			// TODO - Bogus if `imm` is negative.
+			// A negative imm needs no special case: the two's complement
+			// value is what Add folds modulo 2^64.
 			immExpr := expression.Imm(uint64(imm))
 			base := i.Regs.GetArmSP(baseReg)
 			switch src.Mode {
@@ -142,6 +143,37 @@ func (i *Interpreter) maybeHandleLoadStore(inst arm64asm.Inst, pc expression.Exp
 	return false, nil
 }
 
+// regExtshift evaluates the third operand of an ALU instruction, which
+// arm64asm always reports as a RegExtshiftAmount even for a bare register.
+// It returns nil for the right shifts, which the expression language cannot
+// represent.
+func (i *Interpreter) regExtshift(arg arm64asm.RegExtshiftAmount) expression.Expression {
+	reg, extshift, amount, ok := DecodeRegExtshiftAmount(arg)
+	if !ok {
+		return nil
+	}
+	v := i.Regs.GetArm(reg)
+	switch extshift {
+	case "", "LSL", "UXTX", "SXTX":
+	case "UXTW":
+		v = expression.ZeroExtend32(v)
+	case "SXTW":
+		v = expression.SignExtend32(v)
+	case "UXTH":
+		v = expression.ZeroExtend(v, 16)
+	case "SXTH":
+		v = expression.SignExtend(v, 16)
+	case "UXTB":
+		v = expression.ZeroExtend8(v)
+	case "SXTB":
+		v = expression.SignExtend8(v)
+	default:
+		// LSR, ASR and ROR.
+		return nil
+	}
+	return expression.Multiply(v, expression.Imm(uint64(1)<<amount))
+}
+
 func (i *Interpreter) Step() (arm64asm.Inst, error) {
 	if len(i.code) < InstSz {
 		return arm64asm.Inst{}, io.EOF
@@ -150,7 +182,10 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 	if err != nil {
 		return inst, fmt.Errorf("at 0x%x : %v", i.pc, err)
 	}
-	oldPC := i.Regs.Get(PC)
+	// PC reads as the address of the instruction being executed. Derive it
+	// rather than reading the register, which still holds its seed name until
+	// the first Step writes it.
+	oldPC := expression.Add(i.CodeAddress, expression.Imm(i.pc))
 	i.pc += uint64(InstSz)
 	i.code = i.code[InstSz:]
 	i.Regs.setPC(expression.Add(i.CodeAddress, expression.Imm(uint64(i.pc))))
@@ -179,9 +214,7 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 				right = expression.Imm(uint64(imm))
 			}
 		case arm64asm.RegExtshiftAmount:
-			// TODO: Handle this. Similar to ImmShift, it doesn't
-			// have public fields, so we'll need to either parse it from the string representation
-			// or use reflection.
+			right = i.regExtshift(rightArg)
 		}
 		if left != nil && right != nil {
 			if isSub {
@@ -200,8 +233,10 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 		switch src := inst.Args[1].(type) {
 		case arm64asm.Imm:
 			imm, _ := DecodeImmediate(src)
-			// TODO - Bogus if imm is negative
 			v = expression.Imm(uint64(imm))
+		case arm64asm.Imm64:
+			// The 64-bit wide-immediate form, e.g. `mov x0, #1`.
+			v = expression.Imm(src.Imm)
 		case arm64asm.Reg:
 			v = i.Regs.GetArm(src)
 		case arm64asm.RegSP:

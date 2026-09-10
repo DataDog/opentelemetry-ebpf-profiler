@@ -110,6 +110,37 @@ func DecodeRegister(reg string) (aa.Reg, bool) {
 	return aa.Reg(res), true
 }
 
+// DecodeRegExtshiftAmount splits a RegExtshiftAmount into its register, its
+// extend or shift name ("" when absent) and its amount. Like ImmShift it has
+// no public fields, so this parses Arg.String() and reports false for the *ZR
+// forms DecodeRegister cannot name.
+func DecodeRegExtshiftAmount(arg aa.RegExtshiftAmount) (reg aa.Reg,
+	extshift string, amount uint, ok bool) {
+	var fields [2]string
+	n := stringutil.SplitN(arg.String(), ",", fields[:])
+	if n == 0 || n > 2 {
+		return 0, "", 0, false
+	}
+	reg, ok = DecodeRegister(strings.TrimSpace(fields[0]))
+	if !ok {
+		return 0, "", 0, false
+	}
+	if n == 1 {
+		return reg, "", 0, true
+	}
+	extshift = strings.TrimSpace(fields[1])
+	// The amount is optional: "SXTW" alone means "SXTW #0".
+	if pos := strings.Index(extshift, "#"); pos != -1 {
+		v, err := strconv.ParseUint(strings.TrimSpace(extshift[pos+1:]), 10, 6)
+		if err != nil {
+			return 0, "", 0, false
+		}
+		amount = uint(v)
+		extshift = strings.TrimSpace(extshift[:pos])
+	}
+	return reg, extshift, amount, true
+}
+
 // DecodeImmediate converts an arm64asm Arg of immediate type to it's value.
 func DecodeImmediate(arg aa.Arg) (int64, bool) {
 	switch val := arg.(type) {
