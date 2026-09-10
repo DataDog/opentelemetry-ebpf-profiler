@@ -60,6 +60,8 @@ func cmpOrder(u Expression) int {
 		return 6
 	case *extend:
 		return 7
+	case *unknown:
+		return 8
 	default:
 		return 0
 	}

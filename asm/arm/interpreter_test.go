@@ -109,7 +109,7 @@ func runCode(t *testing.T, words ...uint32) *Interpreter {
 // TestRegExtshiftAmount covers the third ALU operand: arm64asm reports it as a
 // RegExtshiftAmount even for a bare register.
 func TestRegExtshiftAmount(t *testing.T) {
-	x0, x1, x2 := expression.Named("X0"), expression.Named("X1"), expression.Named("X2")
+	x1, x2 := expression.Named("X1"), expression.Named("X2")
 	for _, tc := range []struct {
 		name string
 		code uint32
@@ -150,16 +150,48 @@ func TestRegExtshiftAmount(t *testing.T) {
 			want: expression.ZeroExtend32(expression.Add(
 				expression.ZeroExtend32(x1), expression.ZeroExtend32(x2))),
 		},
+		// The byte and halfword extends: a width mix-up here would not
+		// otherwise fail any test.
 		{
-			// A right shift has no expression counterpart, so X0 keeps its entry
-			// value. This pins the gap rather than endorsing it.
+			name: "uxtb",
+			code: 0x8b220020, // add x0, x1, w2, uxtb
+			want: expression.Add(x1, expression.ZeroExtend(x2, 8)),
+		},
+		{
+			name: "uxth",
+			code: 0x8b222020, // add x0, x1, w2, uxth
+			want: expression.Add(x1, expression.ZeroExtend(x2, 16)),
+		},
+		{
+			name: "sxtb",
+			code: 0x8b228020, // add x0, x1, w2, sxtb
+			want: expression.Add(x1, expression.SignExtend(x2, 8)),
+		},
+		{
+			name: "sxth",
+			code: 0x8b22a020, // add x0, x1, w2, sxth
+			want: expression.Add(x1, expression.SignExtend(x2, 16)),
+		},
+		{
+			// A right shift has no expression counterpart, so the destination
+			// is invalidated rather than left stale.
 			name: "lsr is not modeled",
 			code: 0x8b420c20, // add x0, x1, x2, lsr #3
-			want: x0,
+			want: nil,
+		},
+		{
+			// XZR reads as zero, and DecodeRegister has no number for it.
+			name: "xzr operand",
+			code: 0x8b1f0020, // add x0, x1, xzr
+			want: x1,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := runCode(t, tc.code).Regs.Get(X0)
+			if tc.want == nil {
+				require.Equal(t, "unknown", got.DebugString())
+				return
+			}
 			require.True(t, got.Match(tc.want),
 				"got %s, want %s", got.DebugString(), tc.want.DebugString())
 		})
@@ -198,6 +230,34 @@ func TestNegativeMemImmediate(t *testing.T) {
 			require.True(t, got.Match(expression.Add(expression.Named("X1"), off)),
 				"got %s", got.DebugString())
 			require.Negative(t, int64(off.CapturedValue()))
+		})
+	}
+}
+
+// TestAddSubShiftedImmediate pins that ADD/SUB apply the immediate's "LSL
+// #12", not just its low 12 bits: dropping the shift is silently wrong by a
+// factor of 4096, e.g. for `sub sp, sp, #1, lsl #12` in a large stack frame.
+func TestAddSubShiftedImmediate(t *testing.T) {
+	x1 := expression.Named("X1")
+	for _, tc := range []struct {
+		name string
+		code uint32
+		want expression.Expression
+	}{
+		{
+			name: "add",
+			code: 0x91400420, // add x0, x1, #0x1, lsl #12
+			want: expression.Add(x1, expression.Imm(0x1000)),
+		},
+		{
+			name: "sub",
+			code: 0xd1400420, // sub x0, x1, #0x1, lsl #12
+			want: expression.Add(x1, expression.Multiply(expression.Imm(^uint64(0)), expression.Imm(0x1000))),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runCode(t, tc.code).Regs.Get(X0)
+			require.True(t, got.Match(tc.want), "got %s, want %s", got.DebugString(), tc.want.DebugString())
 		})
 	}
 }

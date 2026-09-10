@@ -156,6 +156,16 @@ func applyExtend(name string, v expression.Expression) (expression.Expression, b
 	return nil, false
 }
 
+// setDst writes v to the register an instruction names as its destination.
+func (i *Interpreter) setDst(arg arm64asm.Arg, v expression.Expression) {
+	switch dst := arg.(type) {
+	case arm64asm.Reg:
+		i.Regs.setArm64asm(dst, v)
+	case arm64asm.RegSP:
+		i.Regs.setArm64asmSP(dst, v)
+	}
+}
+
 // regExtshift evaluates the third operand of an ALU instruction, which
 // arm64asm always reports as a RegExtshiftAmount even for a bare register.
 // Returns nil when the operand cannot be modeled.
@@ -214,18 +224,16 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 		case arm64asm.RegExtshiftAmount:
 			right = i.regExtshift(rightArg)
 		}
+		// The destination is written either way: leaving it alone would let a
+		// consumer read its previous value as this instruction's result.
+		sum := expression.Unknown()
 		if left != nil && right != nil {
 			if isSub {
 				right = expression.Multiply(expression.Imm(^uint64(0)), right)
 			}
-			sum := expression.Add(left, right)
-			switch dst := inst.Args[0].(type) {
-			case arm64asm.Reg:
-				i.Regs.setArm64asm(dst, sum)
-			case arm64asm.RegSP:
-				i.Regs.setArm64asmSP(dst, sum)
-			}
+			sum = expression.Add(left, right)
 		}
+		i.setDst(inst.Args[0], sum)
 	case arm64asm.MOV:
 		var v expression.Expression
 		switch src := inst.Args[1].(type) {
@@ -237,14 +245,10 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 		case arm64asm.RegSP:
 			v = i.Regs.GetArmSP(src)
 		}
-		if v != nil {
-			switch dst := inst.Args[0].(type) {
-			case arm64asm.RegSP:
-				i.Regs.setArm64asmSP(dst, v)
-			case arm64asm.Reg:
-				i.Regs.setArm64asm(dst, v)
-			}
+		if v == nil {
+			v = expression.Unknown()
 		}
+		i.setDst(inst.Args[0], v)
 	case arm64asm.ADRP:
 		if src, ok := inst.Args[1].(arm64asm.PCRel); ok {
 			if dst, ok := inst.Args[0].(arm64asm.Reg); ok {

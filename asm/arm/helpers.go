@@ -112,13 +112,23 @@ func DecodeRegister(reg string) (aa.Reg, bool) {
 }
 
 // DecodeRegExtshiftAmount splits a RegExtshiftAmount into its register, its
-// extend or shift name ("" when absent) and its amount. Like ImmShift it has
-// no public fields, so this parses Arg.String() and reports false for the *ZR
-// forms DecodeRegister cannot name.
+// extend or shift name ("" when absent) and its amount. It has no public
+// fields, so this parses Arg.String().
+// https://github.com/golang/go/issues/51517
 func DecodeRegExtshiftAmount(arg aa.RegExtshiftAmount) (reg aa.Reg,
 	extshift string, amount uint, ok bool) {
 	regStr, rest, hasRest := strings.Cut(arg.String(), ",")
-	reg, ok = DecodeRegister(strings.TrimSpace(regStr))
+	name := strings.TrimSpace(regStr)
+	// DecodeRegister rejects the zero registers: they have no number, but they
+	// do have a value, which GetArm knows.
+	switch name {
+	case "XZR":
+		reg, ok = aa.XZR, true
+	case "WZR":
+		reg, ok = aa.WZR, true
+	default:
+		reg, ok = DecodeRegister(name)
+	}
 	if !ok || !hasRest {
 		return reg, "", 0, ok
 	}
