@@ -701,9 +701,9 @@ typedef struct Trace {
   u32 cpu_id;
 
   // Variable data offsets
-  u16 kernel_frame_end;
-  u16 frame_data_end;
-  u16 golang_label_end;
+  u16 num_kernel_frames;
+  u16 frame_data_len;
+  u16 num_golang_labels;
   u16 variable_data_end;
 
   // The number of (variable length) frames present.

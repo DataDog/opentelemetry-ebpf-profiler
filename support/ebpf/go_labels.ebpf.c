@@ -37,6 +37,7 @@ static EBPF_INLINE bool golabel_push(Trace *trace, struct GoString *k, struct Go
   }
   l->val[vlen] = 0;
 
+  trace->num_golang_labels++;
   trace->variable_data_end += sizeof(GolangLabel) / 8;
   return true;
 }
@@ -192,7 +193,6 @@ static EBPF_INLINE int go_labels(struct pt_regs *ctx)
   if (!success) {
     increment_metric(metricID_UnwindGoLabelsFailures);
   }
-  record->trace.golang_label_end = record->trace.variable_data_end;
 
   send_trace(ctx, &record->trace);
   return 0;

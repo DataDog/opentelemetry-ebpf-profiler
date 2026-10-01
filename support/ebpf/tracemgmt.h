@@ -520,9 +520,9 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->goOffsets                         = (GoRuntimeOffsets){};
 
   Trace *trace             = &record->trace;
-  trace->kernel_frame_end  = 0;
-  trace->frame_data_end    = 0;
-  trace->golang_label_end  = 0;
+  trace->num_kernel_frames = 0;
+  trace->frame_data_len    = 0;
+  trace->num_golang_labels = 0;
   trace->variable_data_end = 0;
   trace->num_frames        = 0;
   trace->pid               = 0;
@@ -661,6 +661,7 @@ static inline EBPF_INLINE u64 *push_frame(
     return NULL;
   }
   trace->num_frames++;
+  trace->frame_data_len += frame_size;
   trace->variable_data_end += frame_size;
   pos[0] = frame_header(frame_type, frame_flags, frame_size, frame_data);
   return &pos[1];
@@ -697,6 +698,7 @@ static inline EBPF_INLINE void push_abort(Trace *trace, ErrorCode error)
   // Check that there is enough space for this frame and at least one error frame.
   if (trace->variable_data_end < MAX_FRAME_DATA_LEN) {
     trace->num_frames++;
+    trace->frame_data_len++;
     trace->variable_data[trace->variable_data_end++] =
       frame_header(FRAME_MARKER_UNKNOWN, FRAME_FLAG_ERROR, 1, error);
   }
@@ -717,10 +719,9 @@ static inline EBPF_INLINE void push_kernel_frames(void *ctx, Trace *trace)
   }
   long bytes = bpf_get_stack(ctx, &trace->variable_data[data_end], max_bytes, 0);
   if (bytes > 0) {
-    u16 nframes = (unsigned long)bytes / sizeof(u64);
-    data_end += nframes;
-    trace->variable_data_end = data_end;
-    trace->kernel_frame_end  = data_end;
+    u16 nframes              = (unsigned long)bytes / sizeof(u64);
+    trace->num_kernel_frames = nframes;
+    trace->variable_data_end = data_end + nframes;
   }
 }
 
