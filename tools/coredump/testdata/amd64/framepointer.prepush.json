@@ -1,0 +1,72 @@
+{
+  "coredump-ref": "c9f32a82055c450e4257db2183352126c4fdd79c0cf78045b7617dd51271edbb",
+  "threads": [
+    {
+      "lwp": 469268,
+      "frames": [
+        "main.framepointerTarget+0 in go.opentelemetry.io/ebpf-profiler/tools/coredump/testsources/go/framepointer/framepointer.go:1",
+        "main.caller+0 in go.opentelemetry.io/ebpf-profiler/tools/coredump/testsources/go/framepointer/main.go:15",
+        "main.main+0 in go.opentelemetry.io/ebpf-profiler/tools/coredump/testsources/go/framepointer/main.go:27",
+        "runtime.main+0 in internal/runtime/atomic/types.go:194",
+        "runtime.goexit+0 in runtime/asm_amd64.s:1772"
+      ]
+    },
+    {
+      "lwp": 469271,
+      "frames": [
+        "runtime.usleep+0 in runtime/sys_linux_amd64.s:135",
+        "runtime.sysmon+0 in runtime/proc.go:6506",
+        "runtime.sysmon+0 in runtime/proc.go:6506",
+        "runtime.mstart1+0 in runtime/proc.go:1935",
+        "runtime.mstart0+0 in runtime/proc.go:1897",
+        "runtime.mstart+0 in runtime/asm_amd64.s:427"
+      ]
+    },
+    {
+      "lwp": 469272,
+      "frames": [
+        "runtime.futex+0 in runtime/sys_linux_amd64.s:570",
+        "runtime.futexsleep+0 in runtime/os_linux.go:73",
+        "runtime.notesleep+0 in runtime/lock_futex.go:48",
+        "runtime.stopm+0 in runtime/proc.go:1968",
+        "runtime.findRunnable+0 in runtime/proc.go:3400",
+        "runtime.schedule+0 in runtime/proc.go:4164",
+        "runtime.park_m+0 in runtime/proc.go:4305",
+        "runtime.mcall+0 in runtime/asm_amd64.s:500"
+      ]
+    },
+    {
+      "lwp": 469273,
+      "frames": [
+        "runtime.futex+0 in runtime/sys_linux_amd64.s:570",
+        "runtime.futexsleep+0 in runtime/os_linux.go:73",
+        "runtime.notesleep+0 in runtime/lock_futex.go:48",
+        "runtime.stopm+0 in runtime/proc.go:1968",
+        "runtime.startlockedm+0 in runtime/proc.go:3292",
+        "runtime.schedule+0 in runtime/proc.go:4154",
+        "runtime.park_m+0 in runtime/proc.go:4305",
+        "runtime.mcall+0 in runtime/asm_amd64.s:500"
+      ]
+    },
+    {
+      "lwp": 469274,
+      "frames": [
+        "runtime.futex+0 in runtime/sys_linux_amd64.s:570",
+        "runtime.futexsleep+0 in runtime/os_linux.go:73",
+        "runtime.notesleep+0 in runtime/lock_futex.go:48",
+        "runtime.stopm+0 in runtime/proc.go:1968",
+        "runtime.findRunnable+0 in runtime/proc.go:3400",
+        "runtime.schedule+0 in runtime/proc.go:4164",
+        "runtime.mstart1+0 in runtime/proc.go:1943",
+        "runtime.mstart0+0 in runtime/proc.go:1897",
+        "runtime.mstart+0 in runtime/asm_amd64.s:427"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "ref": "6edd86876eb4972a4c236ff1ff69246353a7d9e0641fb14def1cce008f6d2bb2",
+      "local-path": "/tmp/fp1578-clean-captures/framepointer"
+    }
+  ]
+}
