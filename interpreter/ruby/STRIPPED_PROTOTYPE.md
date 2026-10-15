@@ -1,0 +1,50 @@
+# Stripped Ruby discovery prototype
+
+This branch adds a loader fallback for shared Ruby builds that hide
+`ruby_current_ec`, `rb_vm_exec`, and `ruby_global_symbols`, then remove `.symtab`.
+Normal symbol lookup retains precedence. Discovery uses exported functions,
+instructions, anonymous TLS relocations, and the existing native unwind intervals;
+it does not open separate debug files.
+
+| Information | Discovery |
+| --- | --- |
+| Current EC | ARM64: common accessor called by `rb_thread_current`, `rb_fiber_current`, and `rb_current_receiver`, followed by a complete TLSDESC accessor match. AMD64: matching TLS accesses in `rb_thread_current` and `rb_fiber_current`, including the initialized `tls_index` offset and load displacement. |
+| VM range | Unique common tail-call target of `rb_iseq_eval` and `rb_iseq_eval_main`; require an unwind interval starting at that target. |
+| C-method names | Address read by `rb_sym_immortal_count`, including Ruby 4's atomic load and counter adjustment. |
+
+The recovered TLS offset is checked against `PT_TLS`, then passed to the existing
+`tls.Resolve`/`Locate` path. The prototype does not recover
+`ruby_single_main_ractor`: TLS supplies the per-thread EC, including for Ractors.
+
+## Scope
+
+This is deliberately a compiler-pattern prototype. ARM64 currently recognizes
+the 48-byte GCC accessor with PAC and TLSDESC. AMD64 recognizes GNU dynamic TLS
+with a consecutive `LEA tls_index; CALL resolver; MOV [RAX+offset]` sequence.
+Both architectures require retained dynamic exports and native unwind metadata.
+Unknown instructions, inconsistent accesses, ambiguous targets, and out-of-bounds
+offsets are rejected. Other compilers, TLS dialects, stripped static executables,
+inlined ARM64 accessors, and VM calls without a tail branch need further work.
+
+## Validation
+
+`TestStrippedRubyCoreDumps` removes local symbols and debug sections from temporary
+copies of the existing Ruby 3.3.9, 4.0.1, and 4.0.6 shared-library
+fixtures. It checks complete traces, including C-method names, against the original
+expectations on ARM64 and AMD64, plus the ARM64 Ruby 3.3.9 Ractor fixture.
+No fixture uploads or external stripping tools are
+required. The original module cache is unchanged.
+
+Run from this worktree inside the build container:
+
+```sh
+CGO_ENABLED=1 go test ./interpreter/ruby ./tls
+CGO_ENABLED=1 go test ./tools/coredump -run TestStrippedRubyCoreDumps
+CGO_ENABLED=1 go test ./tools/coredump -run 'TestCoreDumps/testdata/.*/ruby-'
+make lint
+```
+
+Cross-architecture core tests need a test binary matching the core architecture.
+The installed stripped Debian ARM64 Ruby 3.3.8 library was also checked separately,
+with auxiliary file access forbidden: EC module offset `8`, VM range
+`[0x274c50, 0x274eac)`, and symbol table `0x450148` were recovered.

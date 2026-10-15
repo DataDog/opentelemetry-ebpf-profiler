@@ -1,0 +1,114 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package ruby // import "go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
+
+import (
+	"debug/elf"
+	"encoding/hex"
+	"strconv"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func rubyCode(t *testing.T, address uint64, code string) rubyFunction {
+	t.Helper()
+	data, err := hex.DecodeString(code)
+	require.NoError(t, err)
+	return rubyFunction{address, data}
+}
+
+func TestRubyARMTLSDescriptor(t *testing.T) {
+	// Ruby 4.0.6 GCC accessor: TPIDR_EL0 + TLSDESC resolver result.
+	fn := rubyCode(t, 0x2cbc80, "3f2303d541d03bd5fd7bbfa9fd030091"+
+		"c025009002f441f900a00f9140003fd6206860f8fd7bc1a8bf2303d5c0035fd6")
+	slot, err := rubyARMTLSDescriptor(fn)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0x7833e8), slot)
+
+	for _, off := range []int{4, 20, 24, 28, 32, 44} {
+		t.Run(strconv.Itoa(off), func(t *testing.T) {
+			bad := rubyFunction{fn.address, append([]byte(nil), fn.code...)}
+			bad.code[off] ^= 1 // Wrong TP register, descriptor, call, load or return.
+			_, err := rubyARMTLSDescriptor(bad)
+			require.Error(t, err)
+		})
+	}
+	_, err = rubyARMTLSDescriptor(rubyFunction{fn.address, fn.code[:47]})
+	require.Error(t, err)
+}
+
+func TestRubyAMDTLSAccess(t *testing.T) {
+	// Ruby 4.0.6 rb_thread_current, including GNU TLS prefixes and volatile EC spill.
+	fn := rubyCode(t, 0x265240, "f30f1efa4883ec1866488d3db0382600"+
+		"666648e818a2ddff488b004889442408488b442408488b4030488b40104883c418c3")
+	access, err := rubyAMDTLSAccess(fn)
+	require.NoError(t, err)
+	require.Equal(t, rubyTLSAccess{slot: 0x4c8b00, resolverCall: 0x3f470}, access)
+
+	// Ruby 3.3's rb_fiber_current keeps the loaded EC in RBX.
+	otherDst := rubyFunction{fn.address, append([]byte(nil), fn.code...)}
+	otherDst.code[26] = 0x18
+	otherAccess, err := rubyAMDTLSAccess(otherDst)
+	require.NoError(t, err)
+	require.Equal(t, access, otherAccess)
+
+	bad := rubyFunction{fn.address, append([]byte(nil), fn.code...)}
+	bad.code[26] = 1 // Load from RCX instead of the resolver result in RAX.
+	_, err = rubyAMDTLSAccess(bad)
+	require.Error(t, err)
+	_, err = rubyAMDTLSAccess(rubyFunction{fn.address, append(fn.code, fn.code...)})
+	require.Error(t, err, "multiple TLS accesses must not select the first")
+
+	// Local-dynamic code can use a module-base tls_index and a displaced load.
+	// The tls_index precedes the code: x86asm zero-extends the displacement.
+	fn = rubyCode(t, 0x1000, "488d3de7ffffffe8f4000000488b4018c3")
+	access, err = rubyAMDTLSAccess(fn)
+	require.NoError(t, err)
+	require.Equal(t, rubyTLSAccess{slot: 0xfee, loadOffset: 24, resolverCall: 0x1100}, access)
+}
+
+func TestRubySymbolTable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		machine elf.Machine
+		address uint64
+		code    string
+		want    uint64
+	}{
+		{"arm64-ruby4", elf.EM_AARCH64, 0x286460, "e02700b00060179100fcdf8800040051c0035fd6", 0x7835d8},
+		{"arm64-ruby3", elf.EM_AARCH64, 0x1000, "000000b0004841b9c0035fd6", 0x2148},
+		{"amd64-ruby4", elf.EM_X86_64, 0x259970, "f30f1efa8b051624270083e801c3", 0x4cbd90},
+		{"amd64-ruby3", elf.EM_X86_64, 0x1000, "8b05fa0f0000c3", 0x2000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := rubyCode(t, tc.address, tc.code)
+			address, err := rubySymbolTable(tc.machine, fn)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, address)
+			fn.code[len(fn.code)-1] = 0 // Require the complete accessor, including RET.
+			_, err = rubySymbolTable(tc.machine, fn)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestRubyBranchTargets(t *testing.T) {
+	// Ignore an internal loop and a call when looking for a VM tail call.
+	fn := rubyCode(t, 0x1000, "ebfee8f9000000e9f40f0000")
+	targets, err := rubyBranchTargets(elf.EM_X86_64, fn, false)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]bool{0x2000: true}, targets)
+	targets, err = rubyBranchTargets(elf.EM_X86_64, fn, true)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]bool{0x1100: true}, targets)
+
+	fn = rubyCode(t, 0x1000, "00000014ff030014fe070094")
+	targets, err = rubyBranchTargets(elf.EM_AARCH64, fn, false)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]bool{0x2000: true}, targets)
+	targets, err = rubyBranchTargets(elf.EM_AARCH64, fn, true)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]bool{0x3000: true}, targets)
+}
