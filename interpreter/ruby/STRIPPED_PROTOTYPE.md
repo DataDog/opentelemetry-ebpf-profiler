@@ -28,18 +28,32 @@ inlined ARM64 accessors, and VM calls without a tail branch need further work.
 
 ## Validation
 
-`TestStrippedRubyCoreDumps` removes local symbols and debug sections from temporary
-copies of the existing Ruby 3.3.9, 4.0.1, and 4.0.6 shared-library
-fixtures. It checks complete traces, including C-method names, against the original
-expectations on ARM64 and AMD64, plus the ARM64 Ruby 3.3.9 Ractor fixture.
-No fixture uploads or external stripping tools are
-required. The original module cache is unchanged.
+The existing `TestCoreDumps` runner loads additional `*-discovery.json` variants
+of the Ruby 3.3.9, 4.0.1, and 4.0.6 shared-library fixtures on ARM64 and AMD64,
+plus the ARM64 Ruby 3.3.9 Ractor fixture. These reuse the captures and expected
+traces from the TLS variants, including C-method names, and set:
+
+```json
+"interpreters": {
+  "ruby": {
+    "disable_ec_fallback": true,
+    "disable_symbol_lookup": true
+  }
+}
+```
+
+`disable_symbol_lookup` skips direct and fallback lookups of the internal EC,
+VM and symbol-table symbols. Exported accessors and `ruby_version` remain
+available. This forces the stripped-library discovery paths without modifying
+the ELF modules. It uses the same per-fixture interpreter configuration as the
+TLS and main-ractor fallback variants; no additional test runner or fixture
+uploads are required.
 
 Run from this worktree inside the build container:
 
 ```sh
 CGO_ENABLED=1 go test ./interpreter/ruby ./tls
-CGO_ENABLED=1 go test ./tools/coredump -run TestStrippedRubyCoreDumps
+CGO_ENABLED=1 go test ./tools/coredump -run 'TestCoreDumps/testdata/.*/ruby-.*-discovery.json'
 CGO_ENABLED=1 go test ./tools/coredump -run 'TestCoreDumps/testdata/.*/ruby-'
 make lint
 ```
