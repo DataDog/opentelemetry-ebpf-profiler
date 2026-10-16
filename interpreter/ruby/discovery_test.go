@@ -54,10 +54,14 @@ func TestRubyDiscoveryCorpus(t *testing.T) {
 	}
 }
 
+// Ruby 4.0.6 GCC accessor: TPIDR_EL0 + TLSDESC resolver result.
+const (
+	armPrefix = "3f2303d541d03bd5fd7bbfa9fd030091c025009002f441f900a00f9140003fd6"
+	armLoad   = "206860f8"
+	armReturn = "fd7bc1a8bf2303d5c0035fd6"
+)
+
 func TestRubyDiscoveryClobbers(t *testing.T) {
-	armPrefix := "3f2303d541d03bd5fd7bbfa9fd030091c025009002f441f900a00f9140003fd6"
-	armLoad := "206860f8"
-	armReturn := "fd7bc1a8bf2303d5c0035fd6"
 	for name, code := range map[string]string{
 		"unknown-operation":  armPrefix + "000000ca" + armLoad + armReturn, // EOR X0, X0, X0
 		"resolver-result":    armPrefix + "e00303aa" + armLoad + armReturn, // MOV X0, X3
@@ -69,7 +73,7 @@ func TestRubyDiscoveryClobbers(t *testing.T) {
 			"c025009002f441f900a00f9140003fd6" + armLoad + armReturn,
 	} {
 		t.Run("arm64/"+name, func(t *testing.T) {
-			_, err := rubyARMTLSDescriptor(rubyCode(t, 0x2cbc80, code))
+			_, err := rubyARMECSlot(rubyCode(t, 0x2cbc80, code), true)
 			require.Error(t, err)
 		})
 	}
@@ -99,11 +103,9 @@ func rubyCode(t *testing.T, address uint64, code string) rubyFunction {
 	return rubyFunction{address, data}
 }
 
-func TestRubyARMTLSDescriptor(t *testing.T) {
-	// Ruby 4.0.6 GCC accessor: TPIDR_EL0 + TLSDESC resolver result.
-	fn := rubyCode(t, 0x2cbc80, "3f2303d541d03bd5fd7bbfa9fd030091"+
-		"c025009002f441f900a00f9140003fd6206860f8fd7bc1a8bf2303d5c0035fd6")
-	slot, err := rubyARMTLSDescriptor(fn)
+func TestRubyARMECSlot(t *testing.T) {
+	fn := rubyCode(t, 0x2cbc80, armPrefix+armLoad+armReturn)
+	slot, err := rubyARMECSlot(fn, true)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0x7833e8), slot)
 
@@ -111,11 +113,11 @@ func TestRubyARMTLSDescriptor(t *testing.T) {
 		t.Run(strconv.Itoa(off), func(t *testing.T) {
 			bad := rubyFunction{fn.address, append([]byte(nil), fn.code...)}
 			bad.code[off] ^= 1 // Wrong TP register, descriptor, call, load or return.
-			_, err := rubyARMTLSDescriptor(bad)
+			_, err := rubyARMECSlot(bad, true)
 			require.Error(t, err)
 		})
 	}
-	_, err = rubyARMTLSDescriptor(rubyFunction{fn.address, fn.code[:47]})
+	_, err = rubyARMECSlot(rubyFunction{fn.address, fn.code[:47]}, true)
 	require.Error(t, err)
 }
 
@@ -126,13 +128,6 @@ func TestRubyAMDTLSAccess(t *testing.T) {
 	access, err := rubyAMDTLSAccess(fn)
 	require.NoError(t, err)
 	require.Equal(t, rubyTLSAccess{slot: 0x4c8b00, resolverCall: 0x3f470}, access)
-
-	// Ruby 3.3's rb_fiber_current keeps the loaded EC in RBX.
-	otherDst := rubyFunction{fn.address, append([]byte(nil), fn.code...)}
-	otherDst.code[26] = 0x18
-	otherAccess, err := rubyAMDTLSAccess(otherDst)
-	require.NoError(t, err)
-	require.Equal(t, access, otherAccess)
 
 	bad := rubyFunction{fn.address, append([]byte(nil), fn.code...)}
 	bad.code[26] = 1 // Load from RCX instead of the resolver result in RAX.

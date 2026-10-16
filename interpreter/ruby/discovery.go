@@ -28,15 +28,41 @@ type rubyFunction struct {
 	code    []byte
 }
 
-func readRubyFunction(ef *pfelf.File, name libpf.SymbolName) (rubyFunction, error) {
-	sym, code, err := ef.SymbolData(name, 4096)
-	if err != nil {
-		return rubyFunction{}, err
+const maxRubyFunctionSize = 4096
+
+func readRubyFunctions(ef *pfelf.File, names ...libpf.SymbolName) ([]rubyFunction, error) {
+	fns := make([]rubyFunction, 0, len(names))
+	for _, name := range names {
+		sym, err := ef.LookupSymbol(name)
+		if err != nil {
+			return nil, err
+		}
+		if elf.ST_TYPE(sym.Info) != elf.STT_FUNC || sym.Size == 0 || sym.Size > maxRubyFunctionSize {
+			return nil, fmt.Errorf("unbounded Ruby function %s", name)
+		}
+		code, err := ef.VirtualMemory(int64(sym.Address), int(sym.Size), maxRubyFunctionSize)
+		if err != nil {
+			return nil, err
+		}
+		fns = append(fns, rubyFunction{uint64(sym.Address), code})
 	}
-	if elf.ST_TYPE(sym.Info) != elf.STT_FUNC || sym.Size == 0 || uint64(len(code)) != sym.Size {
-		return rubyFunction{}, fmt.Errorf("unbounded Ruby function %s", name)
+	return fns, nil
+}
+
+// consistentRubyOffset requires every accessor to yield the same TLS offset.
+func consistentRubyOffset(fns []rubyFunction, offsetOf func(rubyFunction) (uint64, error)) (uint64, error) {
+	var offset uint64
+	for i, fn := range fns {
+		value, err := offsetOf(fn)
+		if err != nil {
+			return 0, err
+		}
+		if i != 0 && value != offset {
+			return 0, fmt.Errorf("inconsistent Ruby TLS accesses")
+		}
+		offset = value
 	}
-	return rubyFunction{uint64(sym.Address), code}, nil
+	return offset, nil
 }
 
 func decodeRubyAMD(code []byte) (x86asm.Inst, error) {
@@ -92,17 +118,13 @@ func rubyBranchTargets(machine elf.Machine, fn rubyFunction, calls bool) (map[ui
 	return targets, nil
 }
 
-func commonRubyTarget(ef *pfelf.File, calls bool, names ...libpf.SymbolName) (uint64, error) {
+func commonRubyTarget(ef *pfelf.File, calls bool, fns []rubyFunction) (uint64, error) {
 	text := ef.Section(".text")
 	if text == nil {
 		return 0, fmt.Errorf("missing Ruby .text section")
 	}
 	var common map[uint64]bool
-	for _, name := range names {
-		fn, err := readRubyFunction(ef, name)
-		if err != nil {
-			return 0, err
-		}
+	for _, fn := range fns {
 		targets, err := rubyBranchTargets(ef.Machine, fn, calls)
 		if err != nil {
 			return 0, err
@@ -138,7 +160,11 @@ const (
 )
 
 func discoverRubyVM(ef *pfelf.File, info *interpreter.LoaderInfo) ([]util.Range, error) {
-	entry, err := commonRubyTarget(ef, false, "rb_iseq_eval", "rb_iseq_eval_main")
+	fns, err := readRubyFunctions(ef, "rb_iseq_eval", "rb_iseq_eval_main")
+	if err != nil {
+		return nil, err
+	}
+	entry, err := commonRubyTarget(ef, false, fns)
 	if err != nil {
 		return nil, err
 	}
@@ -261,74 +287,70 @@ func rubyAMDResolver(ef *pfelf.File, access rubyTLSAccess) error {
 }
 
 // rubyAnonymousTLSReloc finds the symbol-less TLS relocation of the given kind at slot.
-func rubyAnonymousTLSReloc(ef *pfelf.File, kind pfelf.RelocType, slot uint64) (
-	reloc pfelf.ElfReloc, found bool, err error) {
-	err = ef.VisitRelocations(func(r pfelf.ElfReloc, name string, _ pfelf.RelocType) bool {
+func rubyAnonymousTLSReloc(ef *pfelf.File, kind pfelf.RelocType, slot uint64) (pfelf.ElfReloc, error) {
+	var reloc pfelf.ElfReloc
+	found := false
+	err := ef.VisitRelocations(func(r pfelf.ElfReloc, name string, _ pfelf.RelocType) bool {
 		found = name == "" && r.Info>>32 == 0 && r.Off == slot
 		reloc = r
 		return !found
 	}, kind)
-	return reloc, found, err
+	if err != nil || !found {
+		return reloc, fmt.Errorf("no anonymous Ruby TLS relocation at %#x: %v", slot, err)
+	}
+	return reloc, nil
 }
 
-// rubyAMDECOffset returns the EC offset in the TLS block and the resolver used by name.
-func rubyAMDECOffset(ef *pfelf.File, name libpf.SymbolName) (offset, resolver uint64, err error) {
-	fn, err := readRubyFunction(ef, name)
-	if err != nil {
-		return 0, 0, err
-	}
+// rubyAMDECOffset returns the EC offset in the TLS block accessed by fn.
+func rubyAMDECOffset(ef *pfelf.File, fn rubyFunction) (uint64, error) {
 	access, err := rubyAMDTLSAccess(fn)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 	if err := rubyAMDResolver(ef, access); err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 	if access.loadOffset < 0 {
-		return 0, 0, fmt.Errorf("negative Ruby EC load offset %d", access.loadOffset)
+		return 0, fmt.Errorf("negative Ruby EC load offset %d", access.loadOffset)
 	}
-	if _, found, err := rubyAnonymousTLSReloc(ef, pfelf.RelDTPMOD64, access.slot); err != nil || !found {
-		return 0, 0, fmt.Errorf("no anonymous Ruby DTPMOD64 at %#x: %v", access.slot, err)
+	if _, err := rubyAnonymousTLSReloc(ef, pfelf.RelDTPMOD64, access.slot); err != nil {
+		return 0, err
 	}
 	// For a local TLS variable the second tls_index word is initialized
 	// in the ELF. It can name either the variable or the module base.
 	data, err := ef.VirtualMemory(int64(access.slot+8), 8, 8)
 	if err != nil {
-		return 0, 0, fmt.Errorf("cannot read Ruby tls_index: %v", err)
+		return 0, fmt.Errorf("cannot read Ruby tls_index: %v", err)
 	}
 	indexOffset := binary.LittleEndian.Uint64(data)
-	offset = indexOffset + uint64(access.loadOffset)
+	offset := indexOffset + uint64(access.loadOffset)
 	if offset < indexOffset {
-		return 0, 0, fmt.Errorf("overflowing Ruby TLS offset")
+		return 0, fmt.Errorf("overflowing Ruby TLS offset")
 	}
-	return offset, access.resolverCall, nil
+	return offset, nil
 }
 
 func discoverRubyEC(ef *pfelf.File) (*libpf.Symbol, error) {
 	var offset uint64
+	var err error
 	switch ef.Machine {
 	case elf.EM_AARCH64:
-		var err error
 		offset, err = rubyARMECOffset(ef)
-		if err != nil {
-			return nil, err
-		}
 	case elf.EM_X86_64:
-		var err error
-		offset, _, err = rubyAMDECOffset(ef, "rb_thread_current")
+		var fns []rubyFunction
+		fns, err = readRubyFunctions(ef, "rb_thread_current", "rb_fiber_current")
 		if err != nil {
 			return nil, err
 		}
-		fiberOffset, _, err := rubyAMDECOffset(ef, "rb_fiber_current")
-		if err != nil {
-			return nil, err
-		}
-		// Both calls have independently been verified as __tls_get_addr.
-		if offset != fiberOffset {
-			return nil, fmt.Errorf("inconsistent Ruby TLS accesses")
-		}
+		// Each call is independently verified as __tls_get_addr.
+		offset, err = consistentRubyOffset(fns, func(fn rubyFunction) (uint64, error) {
+			return rubyAMDECOffset(ef, fn)
+		})
 	default:
 		return nil, fmt.Errorf("unsupported Ruby TLS machine %v", ef.Machine)
+	}
+	if err != nil {
+		return nil, err
 	}
 	prog := ef.ProgByType(elf.PT_TLS)
 	if prog == nil || prog.Memsz < 8 || offset > prog.Memsz-8 || offset%8 != 0 {
@@ -350,35 +372,41 @@ func rubySymbolTable(machine elf.Machine, fn rubyFunction) (uint64, error) {
 	case elf.EM_AARCH64:
 		return rubyARMSymbolTable(fn)
 	case elf.EM_X86_64:
-		if ok, size := amd.DecodeSkippable(fn.code); ok {
-			fn = rubyFunction{fn.address + uint64(size), fn.code[size:]}
-		}
-		ins, err := x86asm.Decode(fn.code, 64)
-		if err != nil || ins.Op != x86asm.MOV || ins.Args[0] != x86asm.EAX {
-			break
-		}
-		mem, ok := ins.Args[1].(x86asm.Mem)
-		if !ok || mem.Base != x86asm.RIP || mem.Index != 0 || mem.Segment != 0 {
-			break
-		}
-		address := uint64(int64(fn.address) + int64(ins.Len) + rubyDisp(mem.Disp))
-		code := fn.code[ins.Len:]
-		if len(code) == 4 && code[0] == 0x83 && code[1] == 0xe8 && code[2] == 1 {
-			code = code[3:]
-		}
-		if len(code) == 1 && code[0] == 0xc3 {
-			return address, nil
-		}
+		return rubyAMDSymbolTable(fn)
+	default:
+		return 0, fmt.Errorf("unsupported Ruby symbol-table machine %v", machine)
 	}
-	return 0, fmt.Errorf("unsupported rb_sym_immortal_count instructions")
+}
+
+func rubyAMDSymbolTable(fn rubyFunction) (uint64, error) {
+	if ok, size := amd.DecodeSkippable(fn.code); ok {
+		fn = rubyFunction{fn.address + uint64(size), fn.code[size:]}
+	}
+	ins, err := x86asm.Decode(fn.code, 64)
+	if err != nil || ins.Op != x86asm.MOV || ins.Args[0] != x86asm.EAX {
+		return 0, fmt.Errorf("unproven AMD64 Ruby symbol-table load")
+	}
+	mem, ok := ins.Args[1].(x86asm.Mem)
+	if !ok || mem.Base != x86asm.RIP || mem.Index != 0 || mem.Segment != 0 {
+		return 0, fmt.Errorf("unproven AMD64 Ruby symbol-table load")
+	}
+	address := uint64(int64(fn.address) + int64(ins.Len) + rubyDisp(mem.Disp))
+	code := fn.code[ins.Len:]
+	if len(code) == 4 && code[0] == 0x83 && code[1] == 0xe8 && code[2] == 1 {
+		code = code[3:]
+	}
+	if len(code) != 1 || code[0] != 0xc3 {
+		return 0, fmt.Errorf("unsupported AMD64 Ruby symbol-table return")
+	}
+	return address, nil
 }
 
 func discoverRubySymbols(ef *pfelf.File) (libpf.SymbolValue, error) {
-	fn, err := readRubyFunction(ef, "rb_sym_immortal_count")
+	fns, err := readRubyFunctions(ef, "rb_sym_immortal_count")
 	if err != nil {
 		return 0, err
 	}
-	address, err := rubySymbolTable(ef.Machine, fn)
+	address, err := rubySymbolTable(ef.Machine, fns[0])
 	if err != nil {
 		return 0, err
 	}

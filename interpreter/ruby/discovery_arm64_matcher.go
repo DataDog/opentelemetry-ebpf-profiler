@@ -11,7 +11,6 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/asm/arm"
 	e "go.opentelemetry.io/ebpf-profiler/asm/expression"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 )
 
@@ -48,6 +47,10 @@ func (s *rubyARMState) step() (arm64asm.Inst, error) {
 	ins, err := s.it.Step()
 	if err != nil {
 		return ins, err
+	}
+	if rubyARMEnd(ins) {
+		// Callers stop at control flow; never interpret past these linearly.
+		return ins, nil
 	}
 	word := binary.LittleEndian.Uint32(s.code[pc:])
 	switch ins.Op {
@@ -126,9 +129,6 @@ func (s *rubyARMState) step() (arm64asm.Inst, error) {
 		case 0xd503201f, 0xd503245f: // NOP, BTI C.
 			return ins, nil
 		}
-	case arm64asm.RET, arm64asm.B, arm64asm.CBZ, arm64asm.CBNZ, arm64asm.TBZ, arm64asm.TBNZ:
-		// Callers stop at control flow; never interpret past these linearly.
-		return ins, nil
 	}
 	return ins, fmt.Errorf("unsupported ARM64 Ruby instruction %s at +%#x", ins, pc)
 }
@@ -168,51 +168,41 @@ func rubyARMECSlot(fn rubyFunction, helper bool) (uint64, error) {
 	}
 }
 
-func rubyARMTLSDescriptor(fn rubyFunction) (uint64, error) {
-	return rubyARMECSlot(fn, true)
-}
-
 func rubyARMECOffset(ef *pfelf.File) (uint64, error) {
+	fns, err := readRubyFunctions(ef, "rb_thread_current", "rb_fiber_current", "rb_current_receiver")
+	if err != nil {
+		return 0, err
+	}
 	resolve := func(slot uint64) (uint64, error) {
-		r, found, err := rubyAnonymousTLSReloc(ef, pfelf.RelTLSDESC, slot)
-		if err != nil || !found || r.Addend < 0 {
-			return 0, fmt.Errorf("no anonymous Ruby TLSDESC at %#x: %v", slot, err)
+		r, err := rubyAnonymousTLSReloc(ef, pfelf.RelTLSDESC, slot)
+		if err != nil {
+			return 0, err
+		}
+		if r.Addend < 0 {
+			return 0, fmt.Errorf("negative Ruby TLSDESC addend at %#x", slot)
 		}
 		return uint64(r.Addend), nil
 	}
-	if entry, err := commonRubyTarget(ef, true, "rb_thread_current", "rb_fiber_current", "rb_current_receiver"); err == nil {
+	if entry, err := commonRubyTarget(ef, true, fns); err == nil {
 		text := ef.Section(".text")
 		size := min(uint64(rubyARMMaxCode), text.Size-(entry-text.Addr))
 		code, err := ef.VirtualMemory(int64(entry), int(size), int(size))
 		if err != nil {
 			return 0, err
 		}
-		slot, err := rubyARMTLSDescriptor(rubyFunction{entry, code})
+		slot, err := rubyARMECSlot(rubyFunction{entry, code}, true)
 		if err != nil {
 			return 0, err
 		}
 		return resolve(slot)
 	}
-	var offset uint64
-	for i, name := range []libpf.SymbolName{"rb_thread_current", "rb_fiber_current", "rb_current_receiver"} {
-		fn, err := readRubyFunction(ef, name)
-		if err != nil {
-			return 0, err
-		}
+	return consistentRubyOffset(fns, func(fn rubyFunction) (uint64, error) {
 		slot, err := rubyARMECSlot(fn, false)
 		if err != nil {
 			return 0, err
 		}
-		value, err := resolve(slot)
-		if err != nil {
-			return 0, err
-		}
-		if i != 0 && offset != value {
-			return 0, fmt.Errorf("inconsistent Ruby TLS accesses")
-		}
-		offset = value
-	}
-	return offset, nil
+		return resolve(slot)
+	})
 }
 
 func rubyARMSymbolTable(fn rubyFunction) (uint64, error) {

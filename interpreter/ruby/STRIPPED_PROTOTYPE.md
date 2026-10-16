@@ -8,7 +8,7 @@ it does not open separate debug files.
 
 | Information | Discovery |
 | --- | --- |
-| Current EC | ARM64: common accessor called by `rb_thread_current`, `rb_fiber_current`, and `rb_current_receiver`, followed by a complete TLSDESC accessor match. AMD64: matching TLS accesses in `rb_thread_current` and `rb_fiber_current`, including the initialized `tls_index` offset and load displacement. |
+| Current EC | ARM64: common accessor called by `rb_thread_current`, `rb_fiber_current`, and `rb_current_receiver`, followed by a complete TLSDESC accessor match, or else matching inlined accessor prefixes in all three. AMD64: matching TLS accesses in `rb_thread_current` and `rb_fiber_current`, including the initialized `tls_index` offset and load displacement. |
 | VM range | Unique common tail-call target of `rb_iseq_eval` and `rb_iseq_eval_main`; require an unwind interval starting at that target. |
 | C-method names | Address read by `rb_sym_immortal_count`, including Ruby 4's atomic load and counter adjustment. |
 
@@ -18,13 +18,22 @@ The recovered TLS offset is checked against `PT_TLS`, then passed to the existin
 
 ## Scope
 
-This is deliberately a compiler-pattern prototype. ARM64 currently recognizes
-the 48-byte GCC accessor with PAC and TLSDESC. AMD64 recognizes GNU dynamic TLS
-with a consecutive `LEA tls_index; CALL resolver; MOV [RAX+offset]` sequence.
+This is deliberately a compiler-pattern prototype. ARM64 uses bounded symbolic
+matching of TLSDESC accesses in a common helper or inlined accessor prefixes. It
+supports variations in register allocation and thread-pointer read ordering,
+known frame instructions, and optional PAC and BTI instructions. The matcher
+rejects instructions outside its explicitly supported forms.
+
+AMD64 recognizes GNU dynamic TLS with a `LEA tls_index; CALL resolver;
+MOV [RAX+offset]` sequence, allowing an optional `POP RBP` after the call. Resolver
+calls can use a direct PLT call or a RIP-relative indirect GOT call, validated
+against a `__tls_get_addr` relocation.
+
 Both architectures require retained dynamic exports and native unwind metadata.
-Unknown instructions, inconsistent accesses, ambiguous targets, and out-of-bounds
-offsets are rejected. Other compilers, TLS dialects, stripped static executables,
-inlined ARM64 accessors, and VM calls without a tail branch need further work.
+Accessor offsets must agree, even when they use different TLS descriptor slots.
+Inconsistent accesses, ambiguous targets, and out-of-bounds offsets are rejected.
+Unrecognized instruction patterns, other TLS dialects, stripped static
+executables, and VM calls without a tail branch need further work.
 
 ## Validation
 
