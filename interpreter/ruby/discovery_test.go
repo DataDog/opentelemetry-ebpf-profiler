@@ -6,11 +6,91 @@ package ruby // import "go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 import (
 	"debug/elf"
 	"encoding/hex"
+	"encoding/json"
+	"os"
 	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestRubyDiscoveryCorpus(t *testing.T) {
+	// Captured distro accessors, including their original PCs and provenance.
+	// These tests require neither the complete binaries nor network access.
+	data, err := os.ReadFile("testdata/discovery.json")
+	require.NoError(t, err)
+	var cases []struct {
+		Name          string
+		Kind          string
+		Address       uint64
+		Code          string
+		Slot          uint64
+		Resolver      uint64
+		Indirect      bool
+		SymbolAddress uint64 `json:"symbol_address"`
+	}
+	require.NoError(t, json.Unmarshal(data, &cases))
+	require.NotEmpty(t, cases)
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			fn := rubyCode(t, tc.Address, tc.Code)
+			switch tc.Kind {
+			case "amd64-tls":
+				access, err := rubyAMDTLSAccess(fn)
+				require.NoError(t, err)
+				require.Equal(t, rubyTLSAccess{slot: tc.Slot, resolverCall: tc.Resolver, resolverIndirect: tc.Indirect}, access)
+			case "arm64-helper", "arm64-inline":
+				slot, err := rubyARMECSlot(fn, tc.Kind == "arm64-helper")
+				require.NoError(t, err)
+				require.Equal(t, tc.Slot, slot)
+			case "arm64-symbols":
+				address, err := rubySymbolTable(elf.EM_AARCH64, fn)
+				require.NoError(t, err)
+				require.Equal(t, tc.SymbolAddress, address)
+			default:
+				t.Fatalf("unknown corpus case %s", tc.Kind)
+			}
+		})
+	}
+}
+
+func TestRubyDiscoveryClobbers(t *testing.T) {
+	armPrefix := "3f2303d541d03bd5fd7bbfa9fd030091c025009002f441f900a00f9140003fd6"
+	armLoad := "206860f8"
+	armReturn := "fd7bc1a8bf2303d5c0035fd6"
+	for name, code := range map[string]string{
+		"unknown-operation":  armPrefix + "000000ca" + armLoad + armReturn, // EOR X0, X0, X0
+		"resolver-result":    armPrefix + "e00303aa" + armLoad + armReturn, // MOV X0, X3
+		"thread-pointer":     armPrefix + "010080d2" + armLoad + armReturn, // MOV X1, #0
+		"stack-restore":      armPrefix + "e007c1a8" + armLoad + armReturn, // LDP X0, X1, [SP], #16
+		"return-value":       armPrefix + armLoad + "e00301aa" + armReturn,
+		"branch-before-load": armPrefix + "02000014" + armLoad + armReturn,
+		"second-resolver": armPrefix + armLoad +
+			"c025009002f441f900a00f9140003fd6" + armLoad + armReturn,
+	} {
+		t.Run("arm64/"+name, func(t *testing.T) {
+			_, err := rubyARMTLSDescriptor(rubyCode(t, 0x2cbc80, code))
+			require.Error(t, err)
+		})
+	}
+	for name, between := range map[string]string{
+		"pop-result": "58", "overwrite-result": "4889f8", "unknown-operation": "4831c0",
+		"branch-before-load": "eb00", "two-pops": "5d5d",
+	} {
+		t.Run("amd64/"+name, func(t *testing.T) {
+			_, err := rubyAMDTLSAccess(rubyCode(t, 0x1000, "488d3de7ffffffe8f4000000"+between+"488b4018c3"))
+			require.Error(t, err)
+		})
+	}
+	for name, between := range map[string]string{
+		"overwrite-result": "e003012a", "restore-result": "e007c1a8", "unknown-operation": "0000004a",
+	} {
+		t.Run("symbols/"+name, func(t *testing.T) {
+			_, err := rubySymbolTable(elf.EM_AARCH64, rubyCode(t, 0x1000, "000000b0004841b9"+between+"c0035fd6"))
+			require.Error(t, err)
+		})
+	}
+}
 
 func rubyCode(t *testing.T, address uint64, code string) rubyFunction {
 	t.Helper()

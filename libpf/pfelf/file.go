@@ -783,6 +783,10 @@ const (
 	RelDTPMOD64
 	// RelTPOFF64 matches TP-relative relocations (R_AARCH64_TLS_TPREL64, R_X86_64_TPOFF64).
 	RelTPOFF64
+	// RelGlobDat matches dynamically resolved GOT entries.
+	RelGlobDat
+	// RelJumpSlot matches dynamically resolved PLT entries.
+	RelJumpSlot
 )
 
 // classifyRelocAarch64 returns the RelocType for an AARCH64 relocation.
@@ -794,6 +798,10 @@ func classifyRelocAarch64(rela ElfReloc) RelocType {
 		return RelDTPMOD64
 	case elf.R_AARCH64_TLS_TPREL64:
 		return RelTPOFF64
+	case elf.R_AARCH64_GLOB_DAT:
+		return RelGlobDat
+	case elf.R_AARCH64_JUMP_SLOT:
+		return RelJumpSlot
 	default:
 		return 0
 	}
@@ -808,6 +816,10 @@ func classifyRelocX86_64(rela ElfReloc) RelocType {
 		return RelDTPMOD64
 	case elf.R_X86_64_TPOFF64:
 		return RelTPOFF64
+	case elf.R_X86_64_GLOB_DAT:
+		return RelGlobDat
+	case elf.R_X86_64_JMP_SLOT:
+		return RelJumpSlot
 	default:
 		return 0
 	}

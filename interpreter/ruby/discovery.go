@@ -152,77 +152,64 @@ func discoverRubyVM(ef *pfelf.File, info *interpreter.LoaderInfo) ([]util.Range,
 	return []util.Range{{Start: entry, End: block.End}}, nil
 }
 
-// rubyARMECAccessor is GCC's 48-byte rb_current_ec accessor, including its
-// TPIDR_EL0 read and final TLS load. Matching the whole function avoids
-// silently following stale register values through unknown instructions.
-var rubyARMECAccessor = [12]struct{ mask, want uint32 }{
-	{0xffffffff, 0xd503233f}, {0xffffffff, 0xd53bd041},
-	{0xffffffff, 0xa9bf7bfd}, {0xffffffff, 0x910003fd},
-	{0x9f00001f, 0x90000000}, // ADRP X0, page
-	{0xffc003ff, 0xf9400002}, // LDR X2, [X0, offset]
-	{0xffc003ff, 0x91000000}, // ADD X0, X0, offset
-	{0xffffffff, 0xd63f0040}, {0xffffffff, 0xf8606820},
-	{0xffffffff, 0xa8c17bfd}, {0xffffffff, 0xd50323bf}, {0xffffffff, 0xd65f03c0},
-}
-
-func rubyARMTLSDescriptor(fn rubyFunction) (uint64, error) {
-	if len(fn.code) != 4*len(rubyARMECAccessor) {
-		return 0, fmt.Errorf("unsupported ARM64 Ruby EC accessor size")
-	}
-	for i, e := range rubyARMECAccessor {
-		if binary.LittleEndian.Uint32(fn.code[i*4:])&e.mask != e.want {
-			return 0, fmt.Errorf("unsupported ARM64 Ruby EC instruction %d", i)
-		}
-	}
-	loadOffset := uint64((binary.LittleEndian.Uint32(fn.code[20:])>>10)&0xfff) * 8
-	addOffset := uint64((binary.LittleEndian.Uint32(fn.code[24:]) >> 10) & 0xfff)
-	if loadOffset != addOffset {
-		return 0, fmt.Errorf("inconsistent Ruby TLSDESC argument")
-	}
-	ins, err := arm64asm.Decode(fn.code[16:])
-	if err != nil {
-		return 0, err
-	}
-	page := int64((fn.address + 16) &^ 4095)
-	return uint64(page+int64(ins.Args[1].(arm64asm.PCRel))) + addOffset, nil
-}
-
 type rubyTLSAccess struct {
-	slot         uint64
-	loadOffset   int64
-	resolverCall uint64
+	slot             uint64
+	loadOffset       int64
+	resolverCall     uint64
+	resolverIndirect bool
 }
 
-// rubyAMDTLSAccess recognizes a consecutive LEA tls_index, CALL resolver, MOV
-// [RAX+offset] sequence. The caller verifies the TLS relocation and agreement
-// between independent EC consumers before using it.
+// rubyAMDTLSAccess recognizes LEA tls_index, CALL resolver, optional POP RBP,
+// MOV [RAX+offset]. Track instruction ends separately: prefixes and epilogues
+// must not change the base used for either RIP-relative operand.
 func rubyAMDTLSAccess(fn rubyFunction) (rubyTLSAccess, error) {
-	var lea, call x86asm.Inst
+	var candidate rubyTLSAccess
 	var matches []rubyTLSAccess
+	state := 0
 	for off := 0; off < len(fn.code); {
-		pc := fn.address + uint64(off)
 		ins, err := decodeRubyAMD(fn.code[off:])
 		if err != nil {
-			return rubyTLSAccess{}, fmt.Errorf("invalid AMD64 Ruby instruction at %#x", pc)
+			return rubyTLSAccess{}, fmt.Errorf("invalid AMD64 Ruby instruction at %#x", fn.address+uint64(off))
 		}
 		off += ins.Len
-		if lea.Op == x86asm.LEA && call.Op == x86asm.CALL && ins.Op == x86asm.MOV {
-			arg, argOK := lea.Args[1].(x86asm.Mem)
-			rel, relOK := call.Args[0].(x86asm.Rel)
+		end := fn.address + uint64(off)
+		switch {
+		case state == 1 && ins.Op == x86asm.CALL:
+			switch target := ins.Args[0].(type) {
+			case x86asm.Rel:
+				candidate.resolverCall = uint64(int64(end) + int64(target))
+			case x86asm.Mem:
+				if target.Base != x86asm.RIP || target.Index != 0 || target.Segment != 0 {
+					state = 0
+					continue
+				}
+				candidate.resolverCall = uint64(int64(end) + rubyDisp(target.Disp))
+				candidate.resolverIndirect = true
+			default:
+				state = 0
+				continue
+			}
+			state = 2
+			continue
+		case state == 2 && ins.Op == x86asm.POP && ins.Args[0] == x86asm.RBP:
+			state = 3
+			continue
+		case (state == 2 || state == 3) && ins.Op == x86asm.MOV:
 			load, loadOK := ins.Args[1].(x86asm.Mem)
 			dst, dstOK := ins.Args[0].(x86asm.Reg)
-			if lea.Args[0] == x86asm.RDI && argOK && arg.Base == x86asm.RIP &&
-				arg.Index == 0 && arg.Segment == 0 && relOK &&
-				dstOK && dst >= x86asm.RAX && dst <= x86asm.R15 && loadOK &&
+			if dstOK && dst >= x86asm.RAX && dst <= x86asm.R15 && loadOK &&
 				load.Base == x86asm.RAX && load.Index == 0 && load.Segment == 0 {
-				// RIP-relative LEA is relative to the CALL that follows it.
-				matches = append(matches, rubyTLSAccess{
-					slot:       uint64(int64(pc) - int64(call.Len) + rubyDisp(arg.Disp)),
-					loadOffset: rubyDisp(load.Disp), resolverCall: uint64(int64(pc) + int64(rel)),
-				})
+				candidate.loadOffset = rubyDisp(load.Disp)
+				matches = append(matches, candidate)
 			}
 		}
-		lea, call = call, ins
+		state = 0
+		if ins.Op == x86asm.LEA && ins.Args[0] == x86asm.RDI {
+			if arg, ok := ins.Args[1].(x86asm.Mem); ok && arg.Base == x86asm.RIP && arg.Index == 0 && arg.Segment == 0 {
+				candidate = rubyTLSAccess{slot: uint64(int64(end) + rubyDisp(arg.Disp))}
+				state = 1
+			}
+		}
 	}
 	if len(matches) != 1 {
 		return rubyTLSAccess{}, fmt.Errorf("expected one Ruby TLS access, found %d", len(matches))
@@ -230,11 +217,54 @@ func rubyAMDTLSAccess(fn rubyFunction) (rubyTLSAccess, error) {
 	return matches[0], nil
 }
 
+// rubyAMDResolver verifies the resolver by its dynamic relocation, including
+// calls through a PLT stub. The file's GOT pointer has not been relocated yet.
+func rubyAMDResolver(ef *pfelf.File, access rubyTLSAccess) error {
+	slot := access.resolverCall
+	if !access.resolverIndirect {
+		code, err := ef.VirtualMemory(int64(slot), 16, 16)
+		if err != nil {
+			return err
+		}
+		jump := false
+		for len(code) > 0 {
+			ins, err := decodeRubyAMD(code)
+			if err != nil {
+				return err
+			}
+			slot += uint64(ins.Len)
+			code = code[ins.Len:]
+			if ins.Op == x86asm.NOP {
+				continue
+			}
+			mem, ok := ins.Args[0].(x86asm.Mem)
+			if ins.Op != x86asm.JMP || !ok || mem.Base != x86asm.RIP || mem.Index != 0 || mem.Segment != 0 {
+				return fmt.Errorf("unsupported Ruby TLS resolver stub")
+			}
+			slot = uint64(int64(slot) + rubyDisp(mem.Disp))
+			jump = true
+			break
+		}
+		if !jump {
+			return fmt.Errorf("missing Ruby TLS resolver jump")
+		}
+	}
+	found := false
+	err := ef.VisitRelocations(func(r pfelf.ElfReloc, name string, _ pfelf.RelocType) bool {
+		found = r.Off == slot && name == "__tls_get_addr" && r.Addend == 0
+		return !found
+	}, pfelf.RelGlobDat|pfelf.RelJumpSlot)
+	if err != nil || !found {
+		return fmt.Errorf("no __tls_get_addr relocation at %#x: %v", slot, err)
+	}
+	return nil
+}
+
 // rubyAnonymousTLSReloc finds the symbol-less TLS relocation of the given kind at slot.
 func rubyAnonymousTLSReloc(ef *pfelf.File, kind pfelf.RelocType, slot uint64) (
 	reloc pfelf.ElfReloc, found bool, err error) {
 	err = ef.VisitRelocations(func(r pfelf.ElfReloc, name string, _ pfelf.RelocType) bool {
-		found = name == "" && r.Off == slot
+		found = name == "" && r.Info>>32 == 0 && r.Off == slot
 		reloc = r
 		return !found
 	}, kind)
@@ -249,6 +279,9 @@ func rubyAMDECOffset(ef *pfelf.File, name libpf.SymbolName) (offset, resolver ui
 	}
 	access, err := rubyAMDTLSAccess(fn)
 	if err != nil {
+		return 0, 0, err
+	}
+	if err := rubyAMDResolver(ef, access); err != nil {
 		return 0, 0, err
 	}
 	if access.loadOffset < 0 {
@@ -275,36 +308,23 @@ func discoverRubyEC(ef *pfelf.File) (*libpf.Symbol, error) {
 	var offset uint64
 	switch ef.Machine {
 	case elf.EM_AARCH64:
-		entry, err := commonRubyTarget(ef, true, "rb_thread_current", "rb_fiber_current", "rb_current_receiver")
-		if err != nil {
-			return nil, err
-		}
-		size := 4 * len(rubyARMECAccessor)
-		code, err := ef.VirtualMemory(int64(entry), size, size)
-		if err != nil {
-			return nil, err
-		}
-		slot, err := rubyARMTLSDescriptor(rubyFunction{entry, code})
-		if err != nil {
-			return nil, err
-		}
-		reloc, found, err := rubyAnonymousTLSReloc(ef, pfelf.RelTLSDESC, slot)
-		if err != nil || !found || reloc.Addend < 0 {
-			return nil, fmt.Errorf("no anonymous Ruby TLSDESC at %#x: %v", slot, err)
-		}
-		offset = uint64(reloc.Addend)
-	case elf.EM_X86_64:
-		var resolver uint64
 		var err error
-		offset, resolver, err = rubyAMDECOffset(ef, "rb_thread_current")
+		offset, err = rubyARMECOffset(ef)
 		if err != nil {
 			return nil, err
 		}
-		fiberOffset, fiberResolver, err := rubyAMDECOffset(ef, "rb_fiber_current")
+	case elf.EM_X86_64:
+		var err error
+		offset, _, err = rubyAMDECOffset(ef, "rb_thread_current")
 		if err != nil {
 			return nil, err
 		}
-		if offset != fiberOffset || resolver != fiberResolver {
+		fiberOffset, _, err := rubyAMDECOffset(ef, "rb_fiber_current")
+		if err != nil {
+			return nil, err
+		}
+		// Both calls have independently been verified as __tls_get_addr.
+		if offset != fiberOffset {
 			return nil, fmt.Errorf("inconsistent Ruby TLS accesses")
 		}
 	default:
@@ -328,29 +348,7 @@ func discoverRubyEC(ef *pfelf.File) (*libpf.Symbol, error) {
 func rubySymbolTable(machine elf.Machine, fn rubyFunction) (uint64, error) {
 	switch machine {
 	case elf.EM_AARCH64:
-		if len(fn.code) < 12 {
-			break
-		}
-		first, err := arm64asm.Decode(fn.code)
-		if err != nil || first.Op != arm64asm.ADRP || first.Args[0] != arm64asm.X0 {
-			break
-		}
-		address := uint64(int64(fn.address&^4095) + int64(first.Args[1].(arm64asm.PCRel)))
-		word := binary.LittleEndian.Uint32(fn.code[4:])
-		switch len(fn.code) {
-		case 12:
-			if word&0xffc003ff == 0xb9400000 &&
-				binary.LittleEndian.Uint32(fn.code[8:]) == 0xd65f03c0 {
-				return address + uint64((word>>10)&0xfff)*4, nil
-			}
-		case 20:
-			if word&0xffc003ff == 0x91000000 &&
-				binary.LittleEndian.Uint32(fn.code[8:]) == 0x88dffc00 &&
-				binary.LittleEndian.Uint32(fn.code[12:]) == 0x51000400 &&
-				binary.LittleEndian.Uint32(fn.code[16:]) == 0xd65f03c0 {
-				return address + uint64((word>>10)&0xfff), nil
-			}
-		}
+		return rubyARMSymbolTable(fn)
 	case elf.EM_X86_64:
 		if ok, size := amd.DecodeSkippable(fn.code); ok {
 			fn = rubyFunction{fn.address + uint64(size), fn.code[size:]}
