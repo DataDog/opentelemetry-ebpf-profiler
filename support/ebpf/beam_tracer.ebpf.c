@@ -98,6 +98,14 @@ unwind_one_beam_frame(PerCPURecord *record, BEAMProcInfo *info, BEAMRangesSearch
   }
 
   if (info->frame_pointers_enabled) {
+#if defined(__x86_64__)
+    if (!state->return_address) {
+      FramePointerTransition transition = x86_detect_frame_pointer_transition(state);
+      if (unwinder_apply_frame_pointer_transition(state, transition)) {
+        return ERR_OK;
+      }
+    }
+#endif
     if (!unwinder_unwind_frame_pointer(state)) {
       DEBUG_PRINT("beam: invalid frame pointer");
       return ERR_BEAM_FRAME_POINTER_INVALID;
@@ -163,8 +171,6 @@ static EBPF_INLINE int unwind_beam(struct pt_regs *ctx)
   }
 
   DEBUG_PRINT("==== unwind_beam %d, pc: 0x%llx ====", trace->num_frames, state->pc);
-
-  unwinder_analyze_frame_pointer(&record->state);
 
   // "the_active_code_index" symbol is from:
   // https://github.com/erlang/otp/blob/OTP-27.2.4/erts/emulator/beam/code_ix.c#L46

@@ -569,16 +569,109 @@ static inline EBPF_INLINE void unwinder_mark_nonleaf_frame(UnwindState *state)
 #endif
 }
 
-// unwinder_analyze_frame_pointer is intended to be called once at the beginning
-// of an unwinder program that wants to use frame pointer unwinding. It prepares
-// the state. This can be improved in the future to analyze and recover from
-// an epilogue/prologue.
+// Initialize the bound used to validate frame-pointer traversal.
 static inline EBPF_INLINE void unwinder_analyze_frame_pointer(UnwindState *state)
 {
   if (state->sp) {
     state->fp_bound = state->sp;
   }
 }
+
+#if defined(__x86_64__)
+typedef enum FramePointerTransition {
+  FP_TRANSITION_NONE,
+  FP_TRANSITION_BEFORE_FRAME_SAVE,
+  FP_TRANSITION_AT_FP_ESTABLISH,
+  FP_TRANSITION_AT_RETURN,
+} FramePointerTransition;
+
+// 55 48 89 e5: PUSH RBP; MOV RSP,RBP.
+static inline EBPF_INLINE bool x86_is_frame_pointer_setup(u64 pc)
+{
+  u8 instructions[4];
+  return !bpf_probe_read_user(instructions, sizeof(instructions), (void *)pc) &&
+         instructions[0] == 0x55 && instructions[1] == 0x48 && instructions[2] == 0x89 &&
+         instructions[3] == 0xe5;
+}
+
+// Detect canonical x86 frame-pointer transitions in an interrupted frame.
+static inline EBPF_INLINE FramePointerTransition
+x86_detect_frame_pointer_transition(UnwindState *state)
+{
+  if (!state->sp) {
+    return FP_TRANSITION_NONE;
+  }
+
+  u8 opcode;
+  if (bpf_probe_read_user(&opcode, sizeof(opcode), (void *)state->pc)) {
+    return FP_TRANSITION_NONE;
+  }
+
+  if (opcode == 0x55 && x86_is_frame_pointer_setup(state->pc)) {
+    return FP_TRANSITION_BEFORE_FRAME_SAVE;
+  }
+
+  if (opcode == 0x48) {
+    // Before 48 89 e5 (MOV RSP,RBP), RSP points to the saved RBP.
+    const u16 mov_rsp_rbp = 0xe589; // Little-endian bytes 89 e5.
+    u16 operands;
+    u64 saved_fp;
+    if (
+      !bpf_probe_read_user(&operands, sizeof(operands), (void *)(state->pc + 1)) &&
+      operands == mov_rsp_rbp &&
+      !bpf_probe_read_user(&saved_fp, sizeof(saved_fp), (void *)state->sp) &&
+      saved_fp == state->fp) {
+      return FP_TRANSITION_AT_FP_ESTABLISH;
+    }
+    return FP_TRANSITION_NONE;
+  }
+
+  if (opcode == 0xc3) { // RET
+    return FP_TRANSITION_AT_RETURN;
+  }
+  return FP_TRANSITION_NONE;
+}
+
+// Reconstruct the caller cursor after the sampled frame has been preserved.
+static inline EBPF_INLINE bool
+unwinder_apply_frame_pointer_transition(UnwindState *state, FramePointerTransition transition)
+{
+  u64 caller_fp = state->fp;
+  u64 caller_pc;
+  u64 caller_sp = state->sp;
+
+  switch (transition) {
+  case FP_TRANSITION_BEFORE_FRAME_SAVE:
+  case FP_TRANSITION_AT_RETURN:
+    // RBP belongs to the caller and RSP points to the return address into the caller.
+    if (bpf_probe_read_user(&caller_pc, sizeof(caller_pc), (void *)caller_sp)) {
+      return false;
+    }
+    caller_sp += sizeof(caller_pc);
+    break;
+  case FP_TRANSITION_AT_FP_ESTABLISH: {
+    // PUSH executed: RSP points to the saved RBP followed by the return address.
+    u64 frame[2];
+    if (bpf_probe_read_user(frame, sizeof(frame), (void *)caller_sp)) {
+      return false;
+    }
+    caller_fp = frame[0];
+    caller_pc = frame[1];
+    caller_sp += sizeof(frame);
+    break;
+  }
+  default: return false;
+  }
+
+  state->fp_bound = caller_sp;
+  state->fp       = caller_fp;
+  state->pc       = caller_pc;
+  state->sp       = caller_sp;
+  unwinder_mark_nonleaf_frame(state);
+  return true;
+}
+
+#endif
 
 // unwinder_check_frame_size checks that the current frame size does not exceed
 // 'sz' maximum size, and that it is linear. Do not use with split stacks.

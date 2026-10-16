@@ -297,6 +297,13 @@ unwind_one_frame(PerCPURecord *record, bool *stop, bool *delegate_command)
     }
     case UNWIND_COMMAND_STOP: *stop = true; return ERR_OK;
     case UNWIND_COMMAND_FRAME_POINTER:
+      // This command is currently emitted only by the Go pclntab extractor.
+      if (!state->return_address) {
+        FramePointerTransition fp_transition = x86_detect_frame_pointer_transition(state);
+        if (unwinder_apply_frame_pointer_transition(state, fp_transition)) {
+          goto frame_ok;
+        }
+      }
       if (!unwinder_unwind_frame_pointer(state)) {
         goto err_native_pc_read;
       }
