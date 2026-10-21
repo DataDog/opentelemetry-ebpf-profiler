@@ -19,9 +19,21 @@ jobs:
 
       - name: Build metrics diff comment
         id: metrics
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git show "${{ github.event.pull_request.base.sha }}:metrics/metrics.json" > /tmp/metrics_before.json
-          git show "${{ github.event.pull_request.head.sha }}:metrics/metrics.json" > /tmp/metrics_after.json
+          # For rebase-on-upstream PRs, the upstream metric changes are already in
+          # the PR base. Diff the head against the current datadog branch instead.
+          if [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" && "$HEAD_REF" == "rebase-on-upstream" ]]; then
+            before="$(git rev-parse origin/datadog)"
+          else
+            before="$BASE_SHA"
+          fi
+          git show "$before:metrics/metrics.json" > /tmp/metrics_before.json
+          git show "$HEAD_SHA:metrics/metrics.json" > /tmp/metrics_after.json
           python3 .github/workflows/scripts/metrics-pr-comment.py /tmp/metrics_before.json /tmp/metrics_after.json
 
       - name: Find metrics PR comment
