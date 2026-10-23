@@ -2,14 +2,22 @@ package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanag
 
 import (
 	"debug/elf"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"runtime"
 	"testing"
 	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	processcontextpb "go.opentelemetry.io/proto/otlp/processcontext/v1development"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
@@ -19,6 +27,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	"go.opentelemetry.io/ebpf-profiler/process"
+	"go.opentelemetry.io/ebpf-profiler/process/processcontext"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -598,4 +607,104 @@ func TestSynchronizeProcessRunEnrichers(t *testing.T) {
 	require.Equal(2, enricherCalls)
 	meta, _ = pm.metaForPID(pid)
 	require.Equal("foobarbaz", meta.ExtraMeta[key])
+}
+
+// publishContext lays out an OTEL_CTX header followed by its payload in this
+// process's memory, as an OTEP 4719 publisher would. The header starts the
+// returned slice, which the caller must keep alive while it is read.
+func publishContext(t *testing.T, publishedAt uint64) []byte {
+	t.Helper()
+	payload, err := proto.Marshal(&processcontextpb.ProcessContext{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{{
+			Key:   "service.name",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "svc"}},
+		}}},
+	})
+	require.NoError(t, err)
+
+	const headerSize = 32
+	mem := make([]byte, headerSize+len(payload))
+	copy(mem, "OTEL_CTX")
+	binary.NativeEndian.PutUint32(mem[8:], 2) // version
+	binary.NativeEndian.PutUint32(mem[12:], uint32(len(payload)))
+	binary.NativeEndian.PutUint64(mem[16:], publishedAt)
+	binary.NativeEndian.PutUint64(mem[24:], uint64(uintptr(unsafe.Pointer(&mem[headerSize]))))
+	copy(mem[headerSize:], payload)
+	return mem
+}
+
+func TestRefreshProcessContext(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux process memory reads")
+	}
+	pid := libpf.PID(os.Getpid())
+	mem := publishContext(t, 7)
+	defer runtime.KeepAlive(mem)
+	addr := libpf.Address(uintptr(unsafe.Pointer(&mem[0])))
+	// published is what a refresh from mem installs.
+	published, ok := processcontext.Refresh(addr, pid,
+		remotememory.NewProcessVirtualMemory(pid), processcontext.Info{})
+	require.True(t, ok)
+
+	type counters struct{ updated, noChange, unknownPID uint32 }
+	tests := []struct {
+		name     string
+		tracked  bool
+		exiting  bool
+		old      processcontext.Info
+		want     processcontext.Info
+		counters counters
+	}{
+		{
+			name:     "newer context is installed",
+			tracked:  true,
+			want:     published,
+			counters: counters{updated: 1},
+		},
+		{
+			name:     "unknown PID is dropped",
+			counters: counters{unknownPID: 1},
+		},
+		{
+			name:     "exiting PID is dropped",
+			tracked:  true,
+			exiting:  true,
+			counters: counters{unknownPID: 1},
+		},
+		{
+			name:     "unchanged timestamp keeps old",
+			tracked:  true,
+			old:      published,
+			want:     published,
+			counters: counters{noChange: 1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := &ProcessManager{
+				pidToProcessInfo: make(map[libpf.PID]*processInfo),
+				exitEvents:       make(map[libpf.PID]times.KTime),
+			}
+			entry := &processInfo{processContext: tt.old}
+			if tt.tracked {
+				pm.pidToProcessInfo[pid] = entry
+			}
+			if tt.exiting {
+				pm.exitEvents[pid] = 1
+			}
+
+			pm.RefreshProcessContext(pid, addr)
+
+			assert.Equal(t, tt.want, entry.processContext)
+			_, ok := pm.pidToProcessInfo[pid]
+			assert.Equal(t, tt.tracked, ok, "a refresh never creates an entry")
+			got := counters{
+				updated:    pm.ctxStats.updated.Load(),
+				noChange:   pm.ctxStats.noChange.Load(),
+				unknownPID: pm.ctxStats.unknownPID.Load(),
+			}
+			assert.Equal(t, tt.counters, got)
+		})
+	}
 }

@@ -214,6 +214,10 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 		summary[metrics.IDTotalProcParseUsec] = metrics.MetricValue(pm.mappingStats.totalProcParseUsec.Swap(0))
 		summary[metrics.IDErrProcParse] = metrics.MetricValue(pm.mappingStats.numProcParseErrors.Swap(0))
 
+		summary[metrics.IDProcessContextRefreshUpdated] = metrics.MetricValue(pm.ctxStats.updated.Swap(0))
+		summary[metrics.IDProcessContextRefreshNoChange] = metrics.MetricValue(pm.ctxStats.noChange.Swap(0))
+		summary[metrics.IDProcessContextRefreshUnknownPID] = metrics.MetricValue(pm.ctxStats.unknownPID.Swap(0))
+
 		summary.Add(dotnet.GetAndResetMetrics())
 		summary.Add(pm.ebpf.CollectMetrics())
 
