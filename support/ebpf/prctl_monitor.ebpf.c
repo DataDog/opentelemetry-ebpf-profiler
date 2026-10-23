@@ -11,8 +11,8 @@
 #define PR_SET_VMA_ANON_NAME 0
 
 // tracepoint__sys_exit_prctl detects when a process names an anonymous VMA
-// "OTEL_CTX" and triggers a PID resynchronization so the profiler can discover
-// the newly published process context mapping.
+// "OTEL_CTX" and reports the PID to user space with value false: user space
+// only logs it and does not trigger a PID resynchronization.
 //
 // We hook syscall exit, not entry, so the resync runs after the kernel has applied
 // the rename; otherwise user space could re-read /proc/<pid>/maps before
@@ -21,7 +21,7 @@
 // The exit tracepoint only carries the return value, so the prctl arguments are
 // recovered from the task's entry pt_regs (preserved across the syscall).
 SEC("tracepoint/syscalls/sys_exit_prctl")
-int tracepoint__sys_exit_prctl(void *ctx)
+int tracepoint__sys_exit_prctl(UNUSED void *ctx)
 {
   struct task_struct *task = (struct task_struct *)bpf_get_current_task();
   long ptregs_addr         = get_task_pt_regs(task);
@@ -85,7 +85,12 @@ int tracepoint__sys_exit_prctl(void *ctx)
     goto exit;
   }
 
-  if (report_pid(ctx, ((u64)pid << 32) | tid, RATELIMIT_ACTION_PRIORITY)) {
+  // Bypass report_pid: no rate limit bookkeeping (it would throttle real sync
+  // events for this PID) and no user space wakeup. The periodic pid_events drain
+  // picks the entry up. BPF_NOEXIST keeps a pending sync event (true) intact.
+  u64 pid_tgid = ((u64)pid << 32) | tid;
+  bool value   = false;
+  if (!bpf_map_update_elem(&pid_events, &pid_tgid, &value, BPF_NOEXIST)) {
     increment_metric(metricID_NumSyncsFromPrctl);
   }
 

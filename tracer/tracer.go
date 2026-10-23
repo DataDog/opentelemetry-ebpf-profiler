@@ -982,7 +982,8 @@ func (t *Tracer) enableEvent(eventType int) {
 }
 
 // monitorPIDEventsMap iterates over the eBPF map pid_events in batches,
-// collects PIDs and writes them to the keys slice.
+// collects PIDs and writes them to the keys slice. PIDs reported by the prctl
+// monitor (value false) are only logged and not added to keys.
 func (t *Tracer) monitorPIDEventsMap(keys *[]libpf.PIDTID) error {
 	eventsMap := t.ebpfMaps["pid_events"]
 
@@ -996,7 +997,13 @@ func (t *Tracer) monitorPIDEventsMap(keys *[]libpf.PIDTID) error {
 
 		// There can be results even if there's an error.
 		for i := range n {
-			*keys = append(*keys, libpf.PIDTID(removed[i]))
+			pidTid := libpf.PIDTID(removed[i])
+			if !values[i] {
+				log.Debugf("prctl monitor: OTEL_CTX published by PID %d TID %d",
+					pidTid.PID(), pidTid.TID())
+				continue
+			}
+			*keys = append(*keys, pidTid)
 		}
 
 		if errors.Is(err, cebpf.ErrKeyNotExist) {

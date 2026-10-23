@@ -80,7 +80,8 @@ struct reported_pids_t {
 // User space code will periodically iterate through the map and process each entry.
 // Additionally, each time eBPF code writes a value into the map, user space is notified
 // through event_send_trigger (which uses maps/report_events). As key we use the PID/TID
-// of the process/thread and as value always true. When sizing this map, we are thinking
+// of the process/thread and as value true, or false for PIDs that user space should only
+// log and not synchronize (see prctl_monitor.ebpf.c). When sizing this map, we are thinking
 // about the maximum number of unique PIDs that could generate events we're interested in
 // (process new, thread group exit, unknown PC) within a map monitor/processing interval,
 // that we would like to support.
