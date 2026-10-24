@@ -361,50 +361,117 @@ func TestProcessContextRefresh(t *testing.T) {
 	}
 }
 
-// TestOtelCtxEventsKeepLatestAddress checks that the prctl monitor keeps one entry
-// per process, holding the latest address that any of its threads announced.
-func TestOtelCtxEventsKeepLatestAddress(t *testing.T) {
+// TestOtelCtxEvents checks which announcements the prctl monitor records in
+// otel_ctx_events, and that it keeps the latest address per process.
+func TestOtelCtxEvents(t *testing.T) {
 	// Without map monitors, nothing drains otel_ctx_events.
 	tr := newProcessContextTracer(t, nil)
+	events := tr.GetEbpfMaps()["otel_ctx_events"]
 	pid := uint32(os.Getpid())
 	// The prctl monitor ignores processes the profiler doesn't track.
 	require.NoError(t, tr.GetEbpfMaps()["reported_pids"].Put(pid, uint64(0)))
 
+	// Three header pages: two carry the signature, the last one doesn't.
 	pageSize := os.Getpagesize()
-	mem, err := unix.Mmap(-1, 0, 2*pageSize, unix.PROT_READ, unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
+	mem, err := unix.Mmap(-1, 0, 3*pageSize, unix.PROT_READ|unix.PROT_WRITE,
+		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, unix.Munmap(mem)) }()
-	addrs := []uintptr{uintptr(unsafe.Pointer(&mem[0])), uintptr(unsafe.Pointer(&mem[pageSize]))}
+	copy(mem, "OTEL_CTX")
+	copy(mem[pageSize:], "OTEL_CTX")
+	copy(mem[2*pageSize:], "NOT_OTEL")
+	header := func(i int) uintptr { return uintptr(unsafe.Pointer(&mem[i*pageSize])) }
 
-	// Each address is announced in turn from its own thread, which stays alive
-	// until the end, so the next announcement comes from another one.
-	name := otelCtxName()
-	tids := make([]int, len(addrs))
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-	for i, addr := range addrs {
-		announced := make(chan struct{})
-		wg.Go(func() {
-			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
-			tids[i] = unix.Gettid()
-			_ = announceOtelCtx(addr, pageSize, name) // recorded whatever prctl returns
-			close(announced)
-			<-done
+	// A name that the prctl monitor can't read. This happens when a publisher's
+	// name, such as a string literal in read-only data, isn't resident: kernels
+	// without naming support don't read the name, so nothing faults it in, and
+	// the hook can't. PROT_NONE has the same effect on every kernel.
+	unreadable, err := unix.Mmap(-1, 0, pageSize, unix.PROT_READ|unix.PROT_WRITE,
+		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, unix.Munmap(unreadable)) }()
+	copy(unreadable, "OTEL_CTX\x00")
+	require.NoError(t, unix.Mprotect(unreadable, unix.PROT_NONE))
+
+	recorded := func(t *testing.T) map[uint32]uint64 {
+		t.Helper()
+		entries := make(map[uint32]uint64)
+		var key uint32
+		var value uint64
+		iter := events.Iterate()
+		for iter.Next(&key, &value) {
+			entries[key] = value
+		}
+		require.NoError(t, iter.Err())
+		return entries
+	}
+
+	t.Run("latest address per process", func(t *testing.T) {
+		_ = events.Delete(pid)
+		// Each header is announced in turn from its own thread, which stays alive
+		// until the end, so the next announcement comes from another one.
+		name := otelCtxName()
+		tids := make([]int, 2)
+		done := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := range tids {
+			announced := make(chan struct{})
+			wg.Go(func() {
+				runtime.LockOSThread()
+				defer runtime.UnlockOSThread()
+				tids[i] = unix.Gettid()
+				_ = announceOtelCtx(header(i), pageSize, name) // recorded whatever prctl returns
+				close(announced)
+				<-done
+			})
+			<-announced
+		}
+		close(done)
+		wg.Wait()
+		require.NotEqual(t, tids[0], tids[1])
+		assert.Equal(t, map[uint32]uint64{pid: uint64(header(1))}, recorded(t))
+	})
+
+	// A readable name that only starts with "OTEL_CTX".
+	otherName, _ := unix.ByteSliceFromString("OTEL_CTXx")
+
+	tests := []struct {
+		name     string
+		header   uintptr
+		otelName unsafe.Pointer
+		recorded bool
+	}{
+		{
+			name:     "unreadable name, header signature",
+			header:   header(0),
+			otelName: unsafe.Pointer(&unreadable[0]),
+			recorded: true,
+		},
+		{
+			name:     "unreadable name, no header signature",
+			header:   header(2),
+			otelName: unsafe.Pointer(&unreadable[0]),
+		},
+		{
+			// A readable name decides, whatever the header holds.
+			name:     "other readable name, header signature",
+			header:   header(0),
+			otelName: unsafe.Pointer(&otherName[0]),
+		},
+		{
+			name:   "no name, header signature",
+			header: header(0),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_ = events.Delete(pid)
+			_ = announceOtelCtx(tt.header, pageSize, tt.otelName)
+			want := map[uint32]uint64{}
+			if tt.recorded {
+				want[pid] = uint64(tt.header)
+			}
+			assert.Equal(t, want, recorded(t))
 		})
-		<-announced
 	}
-	close(done)
-	wg.Wait()
-	require.NotEqual(t, tids[0], tids[1])
-
-	entries := make(map[uint32]uint64)
-	var key uint32
-	var value uint64
-	iter := tr.GetEbpfMaps()["otel_ctx_events"].Iterate()
-	for iter.Next(&key, &value) {
-		entries[key] = value
-	}
-	require.NoError(t, iter.Err())
-	assert.Equal(t, map[uint32]uint64{pid: uint64(addrs[1])}, entries)
 }
