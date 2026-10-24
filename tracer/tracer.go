@@ -185,6 +185,13 @@ type Tracer struct {
 	// read new PIDs at startup or notified via eBPF.
 	pidEvents chan libpf.PIDTID
 
+	// otelCtxEvents hands the OTEL_CTX header addresses drained from the eBPF map
+	// otel_ctx_events on each periodic tick to the PID event goroutine.
+	otelCtxEvents chan []otelCtxEvent
+
+	// otelCtxDrainErr counts failed drains of otel_ctx_events.
+	otelCtxDrainErr atomic.Uint32
+
 	// intervals provides access to globally configured timers and counters.
 	intervals Intervals
 
@@ -383,6 +390,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		triggerPIDProcessing:   make(chan bool, 1),
 		tracePool:              newTracePool(),
 		pidEvents:              make(chan libpf.PIDTID, pidEventBufferSize),
+		otelCtxEvents:          make(chan []otelCtxEvent, 1),
 		ebpfMaps:               ebpfMaps,
 		ebpfProgs:              ebpfProgs,
 		hooks:                  xsync.NewRWMutex(hooksState{m: make(map[hookPoint]link.Link)}),
@@ -701,11 +709,15 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 		pidPageMappingInfoSize   = 20
 		stackDeltaPageToInfoSize = 16
 		exeIDToStackDeltasSize   = 16
+		// One entry per process publishing its context within a monitor interval
+		otelCtxEventsSize = 14
 	)
 
 	adaption["pid_page_to_mapping_info"] = 1 << uint32(pidPageMappingInfoSize+cfg.MapScaleFactor)
 
 	adaption["stack_delta_page_to_info"] = 1 << uint32(stackDeltaPageToInfoSize+cfg.MapScaleFactor)
+
+	adaption["otel_ctx_events"] = 1 << uint32(otelCtxEventsSize+cfg.MapScaleFactor)
 
 	// Allow for 1s of 'burst' trace data (sizing by Trace length worst-case).
 	// As CPU hot-plugging during runtime is currently not supported use the number of online CPUs
@@ -1011,6 +1023,68 @@ func (t *Tracer) monitorPIDEventsMap(keys *[]libpf.PIDTID) error {
 	return nil
 }
 
+// otelCtxEvent is the OTEL_CTX header address a process announced.
+type otelCtxEvent struct {
+	pid  libpf.PID
+	addr libpf.Address
+}
+
+// monitorOtelCtxEventsMap drains the eBPF map otel_ctx_events in batches. On error,
+// it returns the events drained by the batches before the failing one: entries
+// that the failing call removed, if any, can't be recovered.
+func (t *Tracer) monitorOtelCtxEventsMap() ([]otelCtxEvent, error) {
+	eventsMap := t.ebpfMaps["otel_ctx_events"]
+
+	pids := make([]uint32, 128)
+	addrs := make([]uint64, len(pids))
+	var events []otelCtxEvent
+
+	cursor := cebpf.MapBatchCursor{}
+
+	for {
+		n, err := eventsMap.BatchLookupAndDelete(&cursor, pids, addrs, nil)
+
+		// There can be results even if there's an error.
+		for i := range n {
+			events = append(events, otelCtxEvent{
+				pid: libpf.PID(pids[i]),
+				// Workaround for a CodeQL warning about uint64 -> uintptr (libpf.Address) overflow.
+				addr: libpf.Address(addrs[i] & uint64(^libpf.Address(0))),
+			})
+		}
+
+		if errors.Is(err, cebpf.ErrKeyNotExist) {
+			return events, nil
+		}
+
+		if err != nil {
+			return events, fmt.Errorf(
+				"failed to batch lookup and delete entries from otel_ctx_events map: %w", err)
+		}
+	}
+}
+
+// drainOtelCtxEvents hands the OTEL_CTX header addresses announced since the last
+// drain to the PID event goroutine. It returns false if ctx ends before the hand-off.
+func (t *Tracer) drainOtelCtxEvents(ctx context.Context) bool {
+	events, err := t.monitorOtelCtxEventsMap()
+	if err != nil {
+		log.Warnf("Failed to drain process context events: %v", err)
+		t.otelCtxDrainErr.Add(1)
+	}
+	if len(events) == 0 {
+		return true
+	}
+
+	// The consumer owns events from here on.
+	select {
+	case t.otelCtxEvents <- events:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // eBPFMetricsCollector retrieves the eBPF metrics, calculates their delta values,
 // and translates eBPF IDs into Metric ID.
 // Returns a slice of Metric ID/Value pairs.
@@ -1206,7 +1280,7 @@ func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *libp
 
 	pidEvents := make([]libpf.PIDTID, 0)
 	periodiccaller.StartWithManualTrigger(ctx, t.intervals.MonitorInterval(),
-		t.triggerPIDProcessing, func(_ bool) bool {
+		t.triggerPIDProcessing, func(manualTrigger bool) bool {
 			t.enableEvent(support.EventTypeGenericPID)
 			err := t.monitorPIDEventsMap(&pidEvents)
 			if err != nil {
@@ -1222,7 +1296,13 @@ func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *libp
 
 			// Keep the underlying array alive to avoid GC pressure
 			pidEvents = pidEvents[:0]
-			return true
+
+			// Generic PID events trigger extra calls. Draining only on ticks bounds
+			// refreshes to one per process and tick.
+			if manualTrigger {
+				return true
+			}
+			return t.drainOtelCtxEvents(ctx)
 		})
 
 	// translateIDs is a translation table for eBPF IDs into Metric IDs.
@@ -1239,6 +1319,10 @@ func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *libp
 			metrics.AddSlice(traceEventMetricCollector())
 			metrics.AddSlice(t.eBPFMetricsCollector(translateIDs, previousMetricValue))
 			metrics.AddSlice(t.customLabels.getAndResetMetrics())
+			metrics.AddSlice([]metrics.Metric{{
+				ID:    metrics.IDOtelCtxDrainErr,
+				Value: metrics.MetricValue(t.otelCtxDrainErr.Swap(0)),
+			}})
 		})
 	}
 
