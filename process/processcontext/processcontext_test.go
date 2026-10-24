@@ -848,3 +848,61 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, first, second, "same timestamp must return old unchanged")
 	})
 }
+
+// Refresh only ever upgrades: a newer context replaces old, and anything else,
+// including a failed read, returns old as-is.
+func TestRefresh(t *testing.T) {
+	payload, err := proto.Marshal(&testContext)
+	require.NoError(t, err)
+	const (
+		headerAddr  = libpf.Address(0x1000)
+		payloadAddr = 0x2000
+	)
+	payloadSize := uint32(len(payload))
+	old := Info{
+		ResourceAttrs: attribute.NewSet(attribute.String("service.name", "old-service")),
+		publishedAtNs: 7,
+		valid:         true,
+	}
+
+	tests := []struct {
+		name    string
+		header  []byte
+		want    Info
+		changed bool
+	}{
+		{
+			name:   "newer context replaces old",
+			header: createValidHeader(payloadSize, payloadAddr, 8),
+			want: Info{
+				ResourceAttrs: expectedResourceAttrs(),
+				publishedAtNs: 8,
+				valid:         true,
+			},
+			changed: true,
+		},
+		{
+			name:   "unchanged timestamp keeps old",
+			header: createValidHeader(payloadSize, payloadAddr, 7),
+			want:   old,
+		},
+		{
+			// Unlike Resolve, which falls back to env vars.
+			name:   "read error keeps old",
+			header: createHeader("INVALID!", supportedVersion, payloadSize, payloadAddr, 8),
+			want:   old,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := newMockReader()
+			mock.writeAt(uint64(headerAddr), tt.header)
+			mock.writeAt(payloadAddr, payload)
+
+			got, changed := Refresh(headerAddr, 1, remotememory.RemoteMemory{ReaderAt: mock}, old)
+			assert.Equal(t, tt.changed, changed)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

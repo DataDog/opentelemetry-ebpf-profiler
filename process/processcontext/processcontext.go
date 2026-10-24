@@ -222,6 +222,21 @@ func Resolve(
 	return Info{ResourceAttrs: env, valid: true}
 }
 
+// Refresh re-reads the context at addr, the header address a publisher announced, and reports
+// whether it read a newer one. As in Resolve, a context is newer only if its timestamp is
+// greater than old's, whatever its address. Refresh only ever upgrades: any failure returns
+// old unchanged, since a failed read can't tell an unpublished context from one being updated.
+// Clearing is left to SynchronizeProcess.
+func Refresh(addr libpf.Address, pid libpf.PID, rm remotememory.RemoteMemory,
+	old Info,
+) (Info, bool) {
+	info, err := read(addr, pid, rm, old.publishedAtNs, 0)
+	if err != nil {
+		return old, false
+	}
+	return info, true
+}
+
 func IsContextMapping(isExecutable bool, mappingPath string) bool {
 	return !isExecutable && (mappingPath == contextMappingMemfd ||
 		mappingPath == contextMappingMemfdDeleted ||

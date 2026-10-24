@@ -103,6 +103,13 @@ type ProcessManager struct {
 		numProcParseErrors atomic.Uint32
 	}
 
+	// ctxStats are statistics for RefreshProcessContext
+	ctxStats struct {
+		updated    atomic.Uint32
+		noChange   atomic.Uint32
+		unknownPID atomic.Uint32
+	}
+
 	// elfInfoCache provides a cache to quickly retrieve the ELF info and fileID for a particular
 	// executable. It caches results based on iNode number and device ID. Locked LRU.
 	elfInfoCache *lru.LRU[util.OnDiskFileIdentifier, elfInfo]

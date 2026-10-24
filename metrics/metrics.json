@@ -2258,5 +2258,26 @@
     "name": "UnwindThreadContextAttrsTruncated",
     "field": "bpf.threadctx.attrs_truncated",
     "id": 309
+  },
+  {
+    "description": "Number of process context refreshes that installed a newer context",
+    "type": "counter",
+    "name": "ProcessContextRefreshUpdated",
+    "field": "agent.processctx.refresh.updated",
+    "id": 310
+  },
+  {
+    "description": "Number of process context refreshes that kept the previous context, because the timestamp was unchanged or the read failed",
+    "type": "counter",
+    "name": "ProcessContextRefreshNoChange",
+    "field": "agent.processctx.refresh.no_change",
+    "id": 311
+  },
+  {
+    "description": "Number of process context refreshes dropped because the process was unknown or exiting",
+    "type": "counter",
+    "name": "ProcessContextRefreshUnknownPID",
+    "field": "agent.processctx.refresh.unknown_pid",
+    "id": 312
   }
 ]

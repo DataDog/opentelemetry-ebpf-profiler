@@ -716,6 +716,15 @@ const (
 	// Number of thread context attribute payloads truncated to fit the buffer
 	IDUnwindThreadContextAttrsTruncated = 309
 
+	// Number of process context refreshes that installed a newer context
+	IDProcessContextRefreshUpdated = 310
+
+	// Number of process context refreshes that kept the previous context, because the timestamp was unchanged or the read failed
+	IDProcessContextRefreshNoChange = 311
+
+	// Number of process context refreshes dropped because the process was unknown or exiting
+	IDProcessContextRefreshUnknownPID = 312
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 310
+	IDMax = 313
 )
