@@ -531,7 +531,6 @@ var MetricsTranslation = []metrics.MetricID{
 	0x6d: metrics.IDUnwindLuaJITAttempts,
 	0x6e: metrics.IDUnwindLuaJITErrNoProcInfo,
 	0x6f: metrics.IDSamplesSkippedProcessTooNew,
-	0x71: metrics.IDNumPriorityEventDeferred,
 	0x72: metrics.IDUnwindGoAsmcgocallAttempts,
 	0x73: metrics.IDUnwindGoAsmcgocallSuccess,
 	0x74: metrics.IDUnwindGoAsmcgocallUnwindFailure,
