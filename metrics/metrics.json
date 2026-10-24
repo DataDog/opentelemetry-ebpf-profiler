@@ -2205,6 +2205,7 @@
     "id": 301
   },
   {
+    "obsolete": true,
     "description": "Number of priority PID events deferred (recorded but not signalled) due to rate limiting",
     "type": "counter",
     "name": "NumPriorityEventDeferred",
