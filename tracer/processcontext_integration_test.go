@@ -344,18 +344,18 @@ func TestProcessContextRefresh(t *testing.T) {
 			rep.requireService(t, p.pid, envService)
 
 			events := ebpfMetric(t, tr, metrics.IDNumOtelCtxEvents)
-			updated, noChange := tr.GetProcessManager().ProcessContextRefreshes()
+			refreshes := tr.GetProcessManager().ProcessContextRefreshes()
 			for _, service := range []string{"published", "updated"} {
 				p.publish(t, service)
 				rep.requireService(t, p.pid, service)
 			}
 
 			assert.Greater(t, ebpfMetric(t, tr, metrics.IDNumOtelCtxEvents), events)
-			// The resync triggered by a successful naming may resolve the context
-			// first, leaving the refresh nothing new.
+			// Announcements no longer resynchronize the process, so at least one refresh
+			// must have installed a context. An unrelated sync could still resolve some
+			// publications first.
 			assert.Eventually(t, func() bool {
-				u, n := tr.GetProcessManager().ProcessContextRefreshes()
-				return u+n > updated+noChange
+				return tr.GetProcessManager().ProcessContextRefreshes() > refreshes
 			}, 5*time.Second, 50*time.Millisecond, "no process context refresh")
 		})
 	}
