@@ -45,6 +45,9 @@ var pidNamespaceRole = flag.String(
 
 func TestMain(m *testing.M) {
 	flag.Parse()
+	if *otelCtxPublisherKind != "" {
+		os.Exit(runOtelCtxPublisher(*otelCtxPublisherKind))
+	}
 	switch *pidNamespaceRole {
 	case pidNamespaceTarget, pidNamespaceSibling:
 		os.Exit(runPIDNamespaceTranslationWorkload(*pidNamespaceRole))

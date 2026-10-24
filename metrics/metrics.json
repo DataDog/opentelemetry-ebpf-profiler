@@ -2279,5 +2279,33 @@
     "name": "ProcessContextRefreshUnknownPID",
     "field": "agent.processctx.refresh.unknown_pid",
     "id": 312
+  },
+  {
+    "description": "Number of OTEL_CTX header addresses recorded by the prctl monitor",
+    "type": "counter",
+    "name": "NumOtelCtxEvents",
+    "field": "bpf.num_otel_ctx_events",
+    "id": 313
+  },
+  {
+    "description": "Number of times we failed to update otel_ctx_events",
+    "type": "counter",
+    "name": "OtelCtxEventsErr",
+    "field": "bpf.errors.otel_ctx_events",
+    "id": 314
+  },
+  {
+    "description": "Number of OTEL_CTX header addresses recorded although prctl failed",
+    "type": "counter",
+    "name": "NumOtelCtxEventsPrctlFailed",
+    "field": "bpf.num_otel_ctx_events_prctl_failed",
+    "id": 315
+  },
+  {
+    "description": "Number of failures to drain otel_ctx_events",
+    "type": "counter",
+    "name": "OtelCtxDrainErr",
+    "field": "agent.errors.otel_ctx_drain",
+    "id": 316
   }
 ]

@@ -725,6 +725,18 @@ const (
 	// Number of process context refreshes dropped because the process was unknown or exiting
 	IDProcessContextRefreshUnknownPID = 312
 
+	// Number of OTEL_CTX header addresses recorded by the prctl monitor
+	IDNumOtelCtxEvents = 313
+
+	// Number of times we failed to update otel_ctx_events
+	IDOtelCtxEventsErr = 314
+
+	// Number of OTEL_CTX header addresses recorded although prctl failed
+	IDNumOtelCtxEventsPrctlFailed = 315
+
+	// Number of failures to drain otel_ctx_events
+	IDOtelCtxDrainErr = 316
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 313
+	IDMax = 317
 )
