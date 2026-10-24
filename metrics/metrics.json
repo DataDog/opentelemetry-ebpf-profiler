@@ -2197,6 +2197,7 @@
     "id": 300
   },
   {
+    "obsolete": true,
     "description": "Number of PID resynchronizations triggered by the prctl monitor",
     "type": "counter",
     "name": "NumSyncsFromPrctl",

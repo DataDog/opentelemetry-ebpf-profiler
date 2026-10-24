@@ -689,9 +689,6 @@ const (
 	// Number of samples skipped because the process is too new
 	IDSamplesSkippedProcessTooNew = 300
 
-	// Number of PID resynchronizations triggered by the prctl monitor
-	IDNumSyncsFromPrctl = 301
-
 	// Number of priority PID events deferred (recorded but not signalled) due to rate limiting
 	IDNumPriorityEventDeferred = 302
 

@@ -86,9 +86,9 @@ func Test_ProcessContext(t *testing.T) {
 		env     []string
 	}{
 		"glibc_exe": {exeName: "processctx_exe_glibc"},
-		// Publishes the process context after a delay, so the profiler discovers
-		// the PID before the publication and the prctl monitor must trigger a
-		// resync to pick up the OTEL_CTX mapping.
+		// Publishes the process context after a delay, meant to let the profiler
+		// discover the PID first, so the context is normally refreshed from the
+		// header address that the prctl monitor records.
 		"glibc_exe_delayed_publish": {
 			exeName: "processctx_exe_glibc",
 			env:     []string{"OTEL_PROCESS_CTX_PUBLISH_DELAY_MS=200"},
