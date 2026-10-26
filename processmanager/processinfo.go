@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/process/processcontext"
 	"go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
+	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
@@ -868,6 +869,46 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		// Also see: Unified PID Events design doc
 		pm.ebpf.RemoveReportedPID(pid)
 	}
+}
+
+// RefreshProcessContext re-reads pid's process context at addr, the header address from a
+// publisher's announcement, without resynchronizing mappings. It resolves the context as
+// SynchronizeProcess does, from the stored context and the environment variables recorded for
+// the process, but doesn't look for the mapping or detect an exec. Callers must serialize it
+// with other refreshes, SynchronizeProcess and CleanupPIDs, for example by running them all on
+// the PID event goroutine. pm.mu alone isn't enough: SynchronizeProcess releases it between
+// reading the old context and installing the new one, concurrent refreshes could install out of
+// order, and CleanupPIDs could mark the process exiting after the check below.
+func (pm *ProcessManager) RefreshProcessContext(pid libpf.PID, addr libpf.Address) {
+	pm.mu.RLock()
+	info, ok := pm.pidToProcessInfo[pid]
+	_, exiting := pm.exitEvents[pid] // set by processPIDExit; ProcessedUntil deletes later
+	var old processcontext.Info
+	var envVars map[libpf.String]libpf.String
+	if ok {
+		old = info.processContext
+		envVars = info.meta.InternalEnvVariables
+	}
+	pm.mu.RUnlock()
+	if !ok || exiting {
+		// No processInfo normally means no pid_page_to_mapping_info entry, so eligible
+		// samples of this PID re-report it until a sync succeeds; that sync reads maps after
+		// this publish.
+		return
+	}
+	rm := remotememory.NewProcessVirtualMemory(pid)
+	updated := processcontext.Resolve(uint64(addr), pid, rm, old, envVars)
+	// A process whose memory can no longer be read, because it exited or became a zombie, keeps
+	// its context for its samples still to be reported, as SynchronizeProcess keeps it for a
+	// process it finds gone.
+	if _, err := rm.ReadUint64(addr); errors.Is(err, unix.ESRCH) {
+		return
+	}
+	// info is still the PID's entry: ProcessedUntil only deletes exiting entries, which were
+	// rejected above, and serialized callers can't mark the process exiting meanwhile.
+	pm.mu.Lock()
+	info.processContext = updated
+	pm.mu.Unlock()
 }
 
 // CleanupPIDs executes a periodic synchronization of pidToProcessInfo table with system processes.

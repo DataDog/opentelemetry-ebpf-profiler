@@ -1,15 +1,27 @@
 package processmanager // import "go.opentelemetry.io/ebpf-profiler/processmanager"
 
 import (
+	"bytes"
 	"debug/elf"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"os/exec"
+	"runtime"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/proto"
+
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	processcontextpb "go.opentelemetry.io/proto/otlp/processcontext/v1development"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
@@ -19,6 +31,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	"go.opentelemetry.io/ebpf-profiler/process"
+	"go.opentelemetry.io/ebpf-profiler/process/processcontext"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -598,4 +611,146 @@ func TestSynchronizeProcessRunEnrichers(t *testing.T) {
 	require.Equal(2, enricherCalls)
 	meta, _ = pm.metaForPID(pid)
 	require.Equal("foobarbaz", meta.ExtraMeta[key])
+}
+
+// publishContext lays out an OTEL_CTX header followed by its payload in this
+// process's memory, as an OTEP 4719 publisher would. The header starts the
+// returned slice, which the caller must keep alive while it is read.
+func publishContext(t *testing.T, publishedAt uint64) []byte {
+	t.Helper()
+	payload, err := proto.Marshal(&processcontextpb.ProcessContext{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{{
+			Key:   "service.name",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "svc"}},
+		}}},
+	})
+	require.NoError(t, err)
+
+	const headerSize = 32
+	mem := make([]byte, headerSize+len(payload))
+	copy(mem, "OTEL_CTX")
+	binary.NativeEndian.PutUint32(mem[8:], 2) // version
+	binary.NativeEndian.PutUint32(mem[12:], uint32(len(payload)))
+	binary.NativeEndian.PutUint64(mem[16:], publishedAt)
+	binary.NativeEndian.PutUint64(mem[24:], uint64(uintptr(unsafe.Pointer(&mem[headerSize]))))
+	copy(mem[headerSize:], payload)
+	return mem
+}
+
+func TestRefreshProcessContext(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux process memory reads")
+	}
+	pid := libpf.PID(os.Getpid())
+	rm := remotememory.NewProcessVirtualMemory(pid)
+	mem := publishContext(t, 7)
+	defer runtime.KeepAlive(mem)
+	addr := libpf.Address(uintptr(unsafe.Pointer(&mem[0])))
+	// published is what a refresh from mem installs.
+	published := processcontext.Resolve(uint64(addr), pid, rm, processcontext.Info{}, nil)
+	env := map[libpf.String]libpf.String{libpf.Intern("OTEL_SERVICE_NAME"): libpf.Intern("env-svc")}
+	// fromEnv is the context built from the process's environment alone.
+	fromEnv := processcontext.Resolve(0, pid, rm, processcontext.Info{}, env)
+	svc, _ := published.ResourceAttrs.Value("service.name")
+	require.Equal(t, "svc", svc.AsString())
+	svc, _ = fromEnv.ResourceAttrs.Value("service.name")
+	require.Equal(t, "env-svc", svc.AsString())
+	page, err := unix.Mmap(-1, 0, os.Getpagesize(), unix.PROT_NONE, unix.MAP_PRIVATE|unix.MAP_ANON)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = unix.Munmap(page) })
+	unreadable := libpf.Address(uintptr(unsafe.Pointer(&page[0])))
+
+	tests := []struct {
+		name    string
+		tracked bool
+		exiting bool
+		addr    libpf.Address
+		old     processcontext.Info
+		want    processcontext.Info
+	}{
+		{
+			name:    "newer context is installed",
+			tracked: true,
+			addr:    addr,
+			want:    published,
+		},
+		{
+			name:    "unchanged timestamp keeps old",
+			tracked: true,
+			addr:    addr,
+			old:     published,
+			want:    published,
+		},
+		{
+			name:    "unreadable header falls back to the environment",
+			tracked: true,
+			addr:    unreadable,
+			old:     published,
+			want:    fromEnv,
+		},
+		{
+			name: "unknown PID is dropped",
+			addr: addr,
+		},
+		{
+			name:    "exiting PID is dropped",
+			tracked: true,
+			exiting: true,
+			addr:    addr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := &ProcessManager{
+				pidToProcessInfo: make(map[libpf.PID]*processInfo),
+				exitEvents:       make(map[libpf.PID]times.KTime),
+			}
+			entry := &processInfo{
+				meta:           process.Meta{InternalEnvVariables: env},
+				processContext: tt.old,
+			}
+			if tt.tracked {
+				pm.pidToProcessInfo[pid] = entry
+			}
+			if tt.exiting {
+				pm.exitEvents[pid] = 1
+			}
+
+			pm.RefreshProcessContext(pid, tt.addr)
+
+			assert.Equal(t, tt.want, entry.processContext)
+			_, ok := pm.pidToProcessInfo[pid]
+			assert.Equal(t, tt.tracked, ok, "a refresh never creates an entry")
+		})
+	}
+
+	t.Run("exited process keeps its context", func(t *testing.T) {
+		// A child that exited and isn't reaped yet is a zombie: its PID still exists, but its
+		// memory doesn't.
+		cmd := exec.Command("/bin/true")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Wait() })
+		zombie := libpf.PID(cmd.Process.Pid)
+		require.Eventually(t, func() bool {
+			stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", zombie))
+			// The state follows the parenthesized command name.
+			i := bytes.LastIndexByte(stat, ')')
+			return err == nil && i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z'
+		}, 5*time.Second, 10*time.Millisecond)
+
+		pm := &ProcessManager{
+			pidToProcessInfo: make(map[libpf.PID]*processInfo),
+			exitEvents:       make(map[libpf.PID]times.KTime),
+		}
+		entry := &processInfo{
+			meta:           process.Meta{InternalEnvVariables: env},
+			processContext: published,
+		}
+		pm.pidToProcessInfo[zombie] = entry
+
+		pm.RefreshProcessContext(zombie, addr)
+
+		assert.Equal(t, published, entry.processContext)
+	})
 }
