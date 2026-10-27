@@ -682,8 +682,9 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	numParseErrors, err := pr.IterateMappings(func(m process.RawMapping) bool {
 		if processcontext.IsContextMapping(m.IsExecutable(), m.Path) {
 			contextMappingAddr = m.Vaddr
-			// The eBPF hook on prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME) will trigger a
-			// PID resynchronization when the process names its context mapping "OTEL_CTX".
+			// Later publications and updates don't need a resync: the eBPF hook on
+			// prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME) records the header address, and
+			// RefreshProcessContext re-reads the context there.
 		}
 
 		interpreterMapping := isInterpreterMapping(&m)
