@@ -12,6 +12,7 @@ extern struct metrics_t metrics;
 extern struct report_events_t report_events;
 extern struct reported_pids_t reported_pids;
 extern struct pid_events_t pid_events;
+extern struct otel_ctx_events_t otel_ctx_events;
 extern struct inhibit_events_t inhibit_events;
 extern struct interpreter_offsets_t interpreter_offsets;
 extern struct trace_events_t trace_events;
