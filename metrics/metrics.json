@@ -2309,5 +2309,19 @@
     "name": "ExeIDToStackDeltaMetaDelete",
     "field": "agent.errors.exe_id_to_stackdelta_meta_delete",
     "id": 315
+  },
+  {
+    "description": "Number of OTEL_CTX header addresses recorded by the prctl monitor",
+    "type": "counter",
+    "name": "NumOtelCtxEvents",
+    "field": "bpf.num_otel_ctx_events",
+    "id": 316
+  },
+  {
+    "description": "Number of times we failed to update otel_ctx_events",
+    "type": "counter",
+    "name": "OtelCtxEventsErr",
+    "field": "bpf.errors.otel_ctx_events",
+    "id": 317
   }
 ]

@@ -707,6 +707,12 @@ const (
 	// Number of times deleting an element from exeIDToStackDeltaMeta failed
 	IDExeIDToStackDeltaMetaDelete = 315
 
+	// Number of OTEL_CTX header addresses recorded by the prctl monitor
+	IDNumOtelCtxEvents = 316
+
+	// Number of times we failed to update otel_ctx_events
+	IDOtelCtxEventsErr = 317
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 316
+	IDMax = 318
 )
