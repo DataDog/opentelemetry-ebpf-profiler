@@ -13,6 +13,9 @@
 // Size of the OTEL_CTX header (OTEP 4719).
 #define OTEL_CTX_HEADER_SIZE 32
 
+// Signature of the OTEL_CTX header (OTEP 4719), as a u64.
+#define OTEL_CTX_SIGNATURE (*(u64 *)"OTEL_CTX")
+
 // tracepoint__sys_exit_prctl detects when a process names a mapping "OTEL_CTX",
 // which publishers do to announce publications and updates of their process
 // context. It records the header address in otel_ctx_events, so user space can
@@ -20,7 +23,9 @@
 //
 // The address is recorded, and the resync triggered, whatever prctl returned:
 // naming is unavailable before Linux 5.17 or without CONFIG_ANON_VMA_NAME, and
-// fails for memfd-backed headers before Linux 6.2. User space validates the
+// fails for memfd-backed headers before Linux 6.2. If the hook can't read the
+// name, the header's signature identifies the announcement instead, but the
+// resync still requires a readable name. User space validates the
 // header itself.
 //
 // We hook syscall exit, not entry, so the resync runs after the kernel has applied
@@ -84,16 +89,21 @@ int tracepoint__sys_exit_prctl(void *ctx)
     goto exit;
   }
 
-  // Read the VMA name from user-space. We only need 9 bytes ("OTEL_CTX" + NUL).
-  __attribute__((aligned(8))) char name[9] = {};
-  if (bpf_probe_read_user(name, sizeof(name), (void *)name_ptr)) {
+  // A NULL name removes the mapping's name: it doesn't announce anything.
+  if (!name_ptr) {
     goto exit;
   }
 
+  // Read the VMA name from user-space. We only need 9 bytes ("OTEL_CTX" + NUL).
+  // The read fails if the name's page isn't resident, since it can't fault it
+  // in, and kernels without naming support return before reading the name.
+  __attribute__((aligned(8))) char name[9] = {};
+  bool name_read = !bpf_probe_read_user(name, sizeof(name), (void *)name_ptr);
+
   // Check for an exact "OTEL_CTX" match. We avoid bpf_strncmp (kernel 5.17+).
   // Instead, compare as a u64 for the 8 characters plus a byte check for the
-  // NUL terminator.
-  if (*(u64 *)name != *(u64 *)"OTEL_CTX" || name[8] != '\0') {
+  // NUL terminator. A readable name that doesn't match never announces a header.
+  if (name_read && (*(u64 *)name != OTEL_CTX_SIGNATURE || name[8] != '\0')) {
     goto exit;
   }
 
@@ -101,14 +111,23 @@ int tracepoint__sys_exit_prctl(void *ctx)
   // least the header. These checks only gate the address: the resync below
   // keeps its own conditions.
   if (addr != 0 && (addr & 0xfff) == 0 && len >= OTEL_CTX_HEADER_SIZE) {
-    if (bpf_map_update_elem(&otel_ctx_events, &pid, &addr, BPF_ANY)) {
-      increment_metric(metricID_OtelCtxEventsErr);
-    } else {
-      increment_metric(metricID_NumOtelCtxEvents);
+    // Without a readable name, the header's signature identifies the
+    // announcement. Publishers write the header just before announcing it, so
+    // it is very likely resident.
+    u64 signature = 0;
+    bool announced =
+      name_read || (!bpf_probe_read_user(&signature, sizeof(signature), (void *)addr) &&
+                    signature == OTEL_CTX_SIGNATURE);
+    if (announced) {
+      if (bpf_map_update_elem(&otel_ctx_events, &pid, &addr, BPF_ANY)) {
+        increment_metric(metricID_OtelCtxEventsErr);
+      } else {
+        increment_metric(metricID_NumOtelCtxEvents);
+      }
     }
   }
 
-  if (report_pid(ctx, ((u64)pid << 32) | tid, RATELIMIT_ACTION_PRIORITY)) {
+  if (name_read && report_pid(ctx, ((u64)pid << 32) | tid, RATELIMIT_ACTION_PRIORITY)) {
     increment_metric(metricID_NumSyncsFromPrctl);
   }
 
