@@ -92,7 +92,9 @@ struct pid_events_t {
 } pid_events SEC(".maps");
 
 // otel_ctx_events holds, per process (tgid), the header address from its latest
-// prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, addr, len, "OTEL_CTX").
+// OTEL_CTX announcement: a prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, addr, len, name)
+// whose name is "OTEL_CTX" or, if the hook can't read the name, whose header at addr
+// starts with the OTEL_CTX signature.
 //
 // User space drains it on periodic ticks, so publications from several threads of
 // a process coalesce, and the latest address wins. It is a plain hash rather than
