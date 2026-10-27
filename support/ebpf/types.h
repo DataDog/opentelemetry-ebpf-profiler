@@ -353,6 +353,7 @@ enum {
   metricID_NumSyncsFromPrctl,
 
   // number of priority PID events deferred (recorded but not signalled) due to rate limiting
+  // (deprecated)
   metricID_NumPriorityEventDeferred,
 
   // number of attempted Go asmcgocall stack-switch unwinds
