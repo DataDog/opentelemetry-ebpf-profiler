@@ -19,23 +19,21 @@
 // tracepoint__sys_exit_prctl detects when a process names a mapping "OTEL_CTX",
 // which publishers do to announce publications and updates of their process
 // context. It records the header address in otel_ctx_events, so user space can
-// re-read the context there, and triggers a PID resynchronization.
+// re-read the context there without resynchronizing the process's mappings.
 //
-// The address is recorded, and the resync triggered, whatever prctl returned:
-// naming is unavailable before Linux 5.17 or without CONFIG_ANON_VMA_NAME, and
-// fails for memfd-backed headers before Linux 6.2. If the hook can't read the
-// name, the header's signature identifies the announcement instead, but the
-// resync still requires a readable name. User space validates the
+// The address is recorded whatever prctl returned: naming is unavailable
+// before Linux 5.17 or without CONFIG_ANON_VMA_NAME, and fails for memfd-backed
+// headers before Linux 6.2. If the hook can't read the name, the header's
+// signature identifies the announcement instead. User space validates the
 // header itself.
 //
-// We hook syscall exit, not entry, so the resync runs after the kernel has applied
-// the rename; otherwise user space could re-read /proc/<pid>/maps before
-// "[anon:OTEL_CTX]" is visible and miss the freshly published context.
+// We hook syscall exit, not entry: on the normal naming path, the kernel has
+// copied the name by then, ordinarily faulting it in before the read below.
 //
 // The exit tracepoint only carries the return value, so the prctl arguments are
 // recovered from the task's entry pt_regs (preserved across the syscall).
 SEC("tracepoint/syscalls/sys_exit_prctl")
-int tracepoint__sys_exit_prctl(void *ctx)
+int tracepoint__sys_exit_prctl(UNUSED void *ctx)
 {
   struct task_struct *task = (struct task_struct *)bpf_get_current_task();
   u64 ptregs_addr          = get_task_pt_regs(task);
@@ -72,10 +70,16 @@ int tracepoint__sys_exit_prctl(void *ctx)
     goto exit;
   }
 
-  // The prctl return value is intentionally ignored. Per OTEP 4719, naming the
-  // mapping is best-effort and fails on kernels without CONFIG_ANON_VMA_NAME.
-  // A memfd-backed context is still discoverable as "/memfd:OTEL_CTX" in that
-  // case, so the attempt itself is the signal to resynchronize.
+  // The header starts a mapping, so it is page aligned, and the mapping holds at
+  // least the header.
+  if (addr == 0 || (addr & 0xfff) != 0 || len < OTEL_CTX_HEADER_SIZE) {
+    goto exit;
+  }
+
+  // A NULL name removes the mapping's name: it doesn't announce anything.
+  if (!name_ptr) {
+    goto exit;
+  }
 
   u32 pid = 0;
   u32 tid = 0;
@@ -86,11 +90,6 @@ int tracepoint__sys_exit_prctl(void *ctx)
   if (!bpf_map_lookup_elem(&reported_pids, &pid) && !pid_information_exists(pid)) {
     // Only report PIDs that we explicitly track. This avoids sending kernel worker PIDs
     // to userspace.
-    goto exit;
-  }
-
-  // A NULL name removes the mapping's name: it doesn't announce anything.
-  if (!name_ptr) {
     goto exit;
   }
 
@@ -107,29 +106,24 @@ int tracepoint__sys_exit_prctl(void *ctx)
     goto exit;
   }
 
-  // The header starts a mapping, so it is page aligned, and the mapping holds at
-  // least the header. These checks only gate the address: the resync below
-  // keeps its own conditions.
-  if (addr != 0 && (addr & 0xfff) == 0 && len >= OTEL_CTX_HEADER_SIZE) {
-    // Without a readable name, the header's signature identifies the
-    // announcement. Publishers write the header just before announcing it, so
-    // it is very likely resident.
+  // Without a readable name, the header's signature identifies the announcement.
+  // Publishers write the header just before announcing it, so it is very likely
+  // resident.
+  if (!name_read) {
     u64 signature = 0;
-    bool announced =
-      name_read || (!bpf_probe_read_user(&signature, sizeof(signature), (void *)addr) &&
-                    signature == OTEL_CTX_SIGNATURE);
-    if (announced) {
-      if (bpf_map_update_elem(&otel_ctx_events, &pid, &addr, BPF_ANY)) {
-        increment_metric(metricID_OtelCtxEventsErr);
-      } else {
-        increment_metric(metricID_NumOtelCtxEvents);
-      }
+    if (bpf_probe_read_user(&signature, sizeof(signature), (void *)addr)) {
+      goto exit;
+    }
+    if (signature != OTEL_CTX_SIGNATURE) {
+      goto exit;
     }
   }
 
-  if (name_read && report_pid(ctx, ((u64)pid << 32) | tid, RATELIMIT_ACTION_PRIORITY)) {
-    increment_metric(metricID_NumSyncsFromPrctl);
+  if (bpf_map_update_elem(&otel_ctx_events, &pid, &addr, BPF_ANY)) {
+    increment_metric(metricID_OtelCtxEventsErr);
+    goto exit;
   }
+  increment_metric(metricID_NumOtelCtxEvents);
 
 exit:
   return 0;

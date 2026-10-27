@@ -45,9 +45,9 @@ func (t *Tracer) AttachSchedMonitor() error {
 }
 
 // AttachPrctlMonitor attaches a tracepoint on prctl() to detect when a process
-// names an anonymous VMA "OTEL_CTX" via prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, ...).
-// This triggers a PID resynchronization so the profiler can discover newly published
-// process context mappings.
+// announces its process context header via prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME,
+// addr, len, "OTEL_CTX"). It records the header address, from which the context is
+// refreshed periodically, without resynchronizing the process.
 func (t *Tracer) AttachPrctlMonitor() error {
 	prog, ok := t.ebpfProgs["tracepoint__sys_exit_prctl"]
 	if !ok {
