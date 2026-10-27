@@ -335,7 +335,7 @@ enum {
   // number of samples skipped because the process is too new
   metricID_SamplesSkippedProcessTooNew,
 
-  // number of PID resynchronizations triggered by the prctl monitor
+  // number of PID resynchronizations triggered by the prctl monitor (deprecated)
   metricID_NumSyncsFromPrctl,
 
   // number of priority PID events deferred (recorded but not signalled) due to rate limiting

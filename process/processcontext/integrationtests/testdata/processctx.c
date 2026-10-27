@@ -83,11 +83,12 @@ int main(int argc, char *argv[]) {
 
   signal(SIGTERM, handle_sigterm);
 
-  // OTEL_PROCESS_CTX_PUBLISH_DELAY_MS lets the test exercise the prctl monitor
-  // path: the profiler discovers the PID first, then the publish prctl fires
-  // and triggers a resync. We burn CPU rather than sleep so the process stays
-  // on-CPU and is sampled by the profiler's perf event, which drives process
-  // synchronization before the context is published.
+  // OTEL_PROCESS_CTX_PUBLISH_DELAY_MS lets the test exercise a late
+  // publication: the delay is meant to let the profiler discover the PID first,
+  // so the context arrives through the address the prctl monitor records. We
+  // burn CPU rather than sleep so the process stays on-CPU and is sampled by
+  // the profiler's perf event, which drives process synchronization before the
+  // context is published.
   const char *delay_str = getenv("OTEL_PROCESS_CTX_PUBLISH_DELAY_MS");
   if (delay_str != NULL) {
     int delay_ms = atoi(delay_str);
