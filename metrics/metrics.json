@@ -2258,5 +2258,19 @@
     "name": "UnwindThreadContextAttrsTruncated",
     "field": "bpf.threadctx.attrs_truncated",
     "id": 309
+  },
+  {
+    "description": "Number of OTEL_CTX header addresses recorded by the prctl monitor",
+    "type": "counter",
+    "name": "NumOtelCtxEvents",
+    "field": "bpf.num_otel_ctx_events",
+    "id": 310
+  },
+  {
+    "description": "Number of times we failed to update otel_ctx_events",
+    "type": "counter",
+    "name": "OtelCtxEventsErr",
+    "field": "bpf.errors.otel_ctx_events",
+    "id": 311
   }
 ]

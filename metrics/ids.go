@@ -716,6 +716,12 @@ const (
 	// Number of thread context attribute payloads truncated to fit the buffer
 	IDUnwindThreadContextAttrsTruncated = 309
 
+	// Number of OTEL_CTX header addresses recorded by the prctl monitor
+	IDNumOtelCtxEvents = 310
+
+	// Number of times we failed to update otel_ctx_events
+	IDOtelCtxEventsErr = 311
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 310
+	IDMax = 312
 )

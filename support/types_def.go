@@ -328,4 +328,6 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindThreadContextErrReadThreadCtxBuf:     metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
 	C.metricID_UnwindThreadContextReadSuccesses:           metrics.IDUnwindThreadContextReadSuccesses,
 	C.metricID_UnwindThreadContextAttrsTruncated:          metrics.IDUnwindThreadContextAttrsTruncated,
+	C.metricID_NumOtelCtxEvents:                           metrics.IDNumOtelCtxEvents,
+	C.metricID_OtelCtxEventsErr:                           metrics.IDOtelCtxEventsErr,
 }

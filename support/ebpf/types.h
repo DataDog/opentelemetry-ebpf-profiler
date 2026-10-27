@@ -376,6 +376,12 @@ enum {
   // number of thread context attribute payloads truncated to fit the buffer
   metricID_UnwindThreadContextAttrsTruncated,
 
+  // number of OTEL_CTX header addresses recorded by the prctl monitor
+  metricID_NumOtelCtxEvents,
+
+  // number of times we failed to update otel_ctx_events
+  metricID_OtelCtxEventsErr,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
