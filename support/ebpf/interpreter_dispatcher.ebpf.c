@@ -91,6 +91,21 @@ struct pid_events_t {
   __uint(max_entries, 65536);
 } pid_events SEC(".maps");
 
+// otel_ctx_events holds, per process (tgid), the header address from its latest
+// prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, addr, len, "OTEL_CTX").
+//
+// User space drains it on periodic ticks, so publications from several threads of
+// a process coalesce, and the latest address wins. It is a plain hash rather than
+// an LRU so that, when it is full, failed updates are counted instead of silently
+// evicting other processes' entries. It is sized for one entry per process
+// publishing its context within a monitor interval.
+struct otel_ctx_events_t {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __type(key, u32);
+  __type(value, u64);
+  __uint(max_entries, 16384);
+} otel_ctx_events SEC(".maps");
+
 // The native unwinder needs to be able to determine how each mapping should be unwound.
 //
 // This map contains data to help the native unwinder translate from a virtual address in a given

@@ -1,5 +1,5 @@
 // This file contains the code for the tracepoint on prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, ...)
-// to detect when a process names an anonymous memory mapping "OTEL_CTX".
+// to detect when a process names a memory mapping "OTEL_CTX".
 
 #include "bpfdefs.h"
 #include "tracemgmt.h"
@@ -10,9 +10,18 @@
 #define PR_SET_VMA           0x53564d41
 #define PR_SET_VMA_ANON_NAME 0
 
-// tracepoint__sys_exit_prctl detects when a process names an anonymous VMA
-// "OTEL_CTX" and triggers a PID resynchronization so the profiler can discover
-// the newly published process context mapping.
+// Size of the OTEL_CTX header (OTEP 4719).
+#define OTEL_CTX_HEADER_SIZE 32
+
+// tracepoint__sys_exit_prctl detects when a process names a mapping "OTEL_CTX",
+// which publishers do to announce publications and updates of their process
+// context. It records the header address in otel_ctx_events, so user space can
+// re-read the context there, and triggers a PID resynchronization.
+//
+// The address is recorded, and the resync triggered, whatever prctl returned:
+// naming is unavailable before Linux 5.17 or without CONFIG_ANON_VMA_NAME, and
+// fails for memfd-backed headers before Linux 6.2. User space validates the
+// header itself.
 //
 // We hook syscall exit, not entry, so the resync runs after the kernel has applied
 // the rename; otherwise user space could re-read /proc/<pid>/maps before
@@ -35,15 +44,20 @@ int tracepoint__sys_exit_prctl(void *ctx)
   }
 
 // prctl(int option, unsigned long arg2, unsigned long arg3, unsigned long arg4,
-//       unsigned long arg5): we only need option, arg2 and arg5 (the name).
+//       unsigned long arg5): for PR_SET_VMA_ANON_NAME, arg3 and arg4 are the start
+//       and length of the mapping, and arg5 is the name.
 #if defined(__x86_64__)
   u64 option   = regs.di;
   u64 arg2     = regs.si;
+  u64 addr     = regs.dx;
+  u64 len      = regs.r10;
   u64 name_ptr = regs.r8;
 #elif defined(__aarch64__)
   // At exit x0 (regs[0]) holds the return value, arg1 is preserved in orig_x0.
   u64 option   = regs.orig_x0;
   u64 arg2     = regs.regs[1];
+  u64 addr     = regs.regs[2];
+  u64 len      = regs.regs[3];
   u64 name_ptr = regs.regs[4];
 #else
   #error unsupported architecture
@@ -81,6 +95,17 @@ int tracepoint__sys_exit_prctl(void *ctx)
   // NUL terminator.
   if (*(u64 *)name != *(u64 *)"OTEL_CTX" || name[8] != '\0') {
     goto exit;
+  }
+
+  // The header starts a mapping, so it is page aligned, and the mapping holds at
+  // least the header. These checks only gate the address: the resync below
+  // keeps its own conditions.
+  if (addr != 0 && (addr & 0xfff) == 0 && len >= OTEL_CTX_HEADER_SIZE) {
+    if (bpf_map_update_elem(&otel_ctx_events, &pid, &addr, BPF_ANY)) {
+      increment_metric(metricID_OtelCtxEventsErr);
+    } else {
+      increment_metric(metricID_NumOtelCtxEvents);
+    }
   }
 
   if (report_pid(ctx, ((u64)pid << 32) | tid, RATELIMIT_ACTION_PRIORITY)) {

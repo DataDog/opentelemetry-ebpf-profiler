@@ -43,7 +43,9 @@ func (t *Tracer) StartPIDEventProcessor(ctx context.Context) {
 	go t.processPIDEvents(ctx)
 }
 
-// Process the PID events that are incoming in the Tracer channel.
+// Process the PID events that are incoming in the Tracer channel. Running syncs,
+// cleanups and process context refreshes on this one goroutine serializes them, as
+// RefreshProcessContext requires.
 func (t *Tracer) processPIDEvents(ctx context.Context) {
 	pidCleanupTicker := time.NewTicker(t.intervals.PIDCleanupInterval())
 	defer pidCleanupTicker.Stop()
@@ -53,6 +55,13 @@ func (t *Tracer) processPIDEvents(ctx context.Context) {
 			t.processManager.SynchronizeProcess(process.New(pidTid.PID(), pidTid.TID()))
 		case <-pidCleanupTicker.C:
 			t.processManager.CleanupPIDs()
+		case events := <-t.otelCtxEvents:
+			for _, ev := range events {
+				if ctx.Err() != nil {
+					return
+				}
+				t.processManager.RefreshProcessContext(ev.pid, ev.addr)
+			}
 		case <-ctx.Done():
 			return
 		}
