@@ -198,6 +198,12 @@ type SystemAnalysis struct {
 	Size    uint32
 	Err     int32
 	Address uint64
+	Pid     uint32
+	Runs    uint32
+	PidRuns uint32
+	LastTid uint32
+	LastCpu uint32
+	Pad     uint32
 	Code    [128]uint8
 }
 type TSDInfo struct {

@@ -16,6 +16,27 @@ struct system_analysis_t {
   __uint(max_entries, 1);
 } system_analysis SEC(".maps");
 
+// claim_request returns true when the current task issued the armed request
+// of the given type. While a request is armed, every invocation records
+// diagnostics so an unhandled request tells which tasks did reach the probe.
+static EBPF_INLINE bool claim_request(struct SystemAnalysis *sys, u32 type)
+{
+  if (sys->type != type || sys->tid == 0) {
+    return false;
+  }
+  ATOMIC_ADD(&sys->runs, 1);
+
+  u32 pid = 0, tid = 0;
+  if (!get_pid_tgid(&pid, &tid) || pid != sys->pid) {
+    return false;
+  }
+  ATOMIC_ADD(&sys->pidRuns, 1);
+  sys->lastTid = tid;
+  sys->lastCpu = bpf_get_smp_processor_id();
+
+  return sys->tid == tid;
+}
+
 // read_kernel_memory reads data from given kernel address. This is
 // invoked once on entry to bpf() syscall of the requesting thread,
 // which is guarded and pinned by tid.
@@ -30,8 +51,7 @@ int read_kernel_memory(UNUSED void *ctx)
     return 0;
   }
 
-  u32 pid = 0, tid = 0;
-  if (sys->type != SYS_ANALYSIS_READ_MEM || !get_pid_tgid(&pid, &tid) || sys->tid != tid) {
+  if (!claim_request(sys, SYS_ANALYSIS_READ_MEM)) {
     // Execute the hook only in the context of the requesting task.
     return 0;
   }
@@ -64,8 +84,7 @@ int read_task_struct(struct bpf_raw_tracepoint_args *ctx)
     return 0;
   }
 
-  u32 pid = 0, tid = 0;
-  if (sys->type != SYS_ANALYSIS_READ_TASK || !get_pid_tgid(&pid, &tid) || sys->tid != tid) {
+  if (!claim_request(sys, SYS_ANALYSIS_READ_TASK)) {
     // Execute the hook only in the context of the requesting task.
     return 0;
   }

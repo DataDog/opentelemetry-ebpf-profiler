@@ -1123,6 +1123,13 @@ typedef struct SystemAnalysis {
   u32 size;
   s32 err;
   u64 address;
+  // Diagnostics: pid is set by the requester, the rest by the programs.
+  u32 pid;
+  u32 runs;    // invocations while the request was armed
+  u32 pidRuns; // invocations from the requester process
+  u32 lastTid; // last requester process thread seen
+  u32 lastCpu; // cpu of that invocation
+  u32 pad;
   u8 code[128];
 } SystemAnalysis;
 

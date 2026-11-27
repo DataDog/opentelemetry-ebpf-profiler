@@ -363,6 +363,8 @@ func TestPIDNamespaceTranslationRecursive(t *testing.T) {
 		profiler.SysProcAttr.Cloneflags |= syscall.CLONE_NEWNS
 		output, err := profiler.CombinedOutput()
 		require.NoErrorf(t, err, "profiler subprocess failed: %s", output)
+		// Surface system analysis retry diagnostics of passing runs too.
+		t.Logf("profiler subprocess output:\n%s", output)
 		return
 	}
 	require.Equal(t, 1, os.Getpid(), "profiler must run as PID 1 in its namespace")

@@ -126,6 +126,9 @@ fi
 
 smp="$(nproc 2>/dev/null || echo 4)"
 [ "$smp" -gt 4 ] && smp=4
+smp="${QEMU_SMP:-$smp}"
+# For experiments, e.g. QEMU_EXTRA_ARGS="-accel tcg,thread=single".
+additionalQemuArgs+=" ${QEMU_EXTRA_ARGS:-}"
 
 failed_kernels=()
 for kernel_version in "$@"
